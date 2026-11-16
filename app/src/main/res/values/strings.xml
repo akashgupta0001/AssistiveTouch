@@ -32,6 +32,7 @@
     <string name="act_flash">Flashlight</string>
     <string name="act_split">Split Screen</string>
     <string name="act_settings">Customise</string>
+    <string name="act_exit">Exit AssistiveTouch</string>
 
     <string name="needs_android9">Needs Android 9 or newer</string>
     <string name="no_flash">No flashlight found</string>

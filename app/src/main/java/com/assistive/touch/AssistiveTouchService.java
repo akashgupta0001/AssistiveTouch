@@ -89,6 +89,14 @@ public class AssistiveTouchService extends AccessibilityService
         setupTorch();
         syncButtons();
         rebuildEdges();
+        KeepAliveService.start(this);
+    }
+
+    /** Exit: remove everything and switch this accessibility service off. */
+    public void exit() {
+        cleanup();
+        KeepAliveService.stop(this);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) disableSelf();
     }
 
     @Override
@@ -881,6 +889,9 @@ public class AssistiveTouchService extends AccessibilityService
                 break;
             case SETTINGS:
                 openActivity(MainActivity.class);
+                break;
+            case EXIT:
+                KeepAliveService.exitEverything(this);
                 break;
             case NONE:
             default:

@@ -16,7 +16,8 @@ public enum Action {
     VOLUME_DOWN("vol_down", R.string.act_vol_down, R.drawable.ic_vol_down),
     FLASHLIGHT("flash", R.string.act_flash, R.drawable.ic_flash),
     SPLIT_SCREEN("split", R.string.act_split, R.drawable.ic_split),
-    SETTINGS("settings", R.string.act_settings, R.drawable.ic_settings);
+    SETTINGS("settings", R.string.act_settings, R.drawable.ic_settings),
+    EXIT("exit", R.string.act_exit, R.drawable.ic_power);
 
     public final String id;
     public final int label;
@@ -41,7 +42,7 @@ public enum Action {
     public static final Action[] GESTURE_CHOICES = {
             NONE, MENU, SIDEBAR, HOME, BACK, RECENTS, NOTIFICATIONS, CONTROL_CENTRE,
             SCREENSHOT, LOCK_SCREEN, POWER, VOLUME_UP, VOLUME_DOWN, FLASHLIGHT,
-            SPLIT_SCREEN, SETTINGS
+            SPLIT_SCREEN, SETTINGS, EXIT
     };
 
     public static Action fromId(String id) {

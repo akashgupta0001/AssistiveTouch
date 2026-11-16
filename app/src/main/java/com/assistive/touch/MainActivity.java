@@ -8,6 +8,7 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
 import android.util.TypedValue;
@@ -45,6 +46,7 @@ public class MainActivity extends Activity {
     private LinearLayout buttonSection;
     private final Button[] tabButtons = new Button[Prefs.BUTTON_COUNT];
     private int currentButton;
+    private boolean askedNotif;
     private final List<Runnable> refreshers = new ArrayList<>();
     private static final int REQ_PHOTO = 41;
 
@@ -85,6 +87,24 @@ public class MainActivity extends Activity {
         appInfo.setOnClickListener(v -> startActivity(new Intent(
                 Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName()))));
         root.addView(appInfo);
+
+        // ---- keep running
+        root.addView(header("Keep running in background"));
+        LinearLayout kr = card(root);
+        kr.addView(note("Xiaomi / Redmi / POCO phones close apps when you tap \"Clear all\". "
+                + "Do these 3 steps once so AssistiveTouch never stops:"));
+        kr.addView(actionButton("1. Allow Autostart", this::openAutostart));
+        kr.addView(actionButton("2. Battery saver → No restrictions", this::openBatterySettings));
+        kr.addView(note("3. Open Recents, then long-press (or pull down) the AssistiveTouch card and tap the 🔒 lock icon. "
+                + "Locked apps are skipped by \"Clear all\"."));
+        kr.addView(note("If the buttons ever disappear, open this app: if it says OFF, turn it on again in Accessibility."));
+        Button exit = actionButton("Exit AssistiveTouch", () -> {
+            KeepAliveService.exitEverything(this);
+            Toast.makeText(this, "AssistiveTouch turned off", Toast.LENGTH_SHORT).show();
+            status.postDelayed(this::onResume, 500);
+        });
+        exit.setTextColor(0xFFFF3B30);
+        kr.addView(exit);
 
         // ---- floating buttons
         root.addView(header("Floating buttons"));
@@ -148,6 +168,13 @@ public class MainActivity extends Activity {
         status.setText(on ? R.string.status_on : R.string.status_off);
         status.setTextColor(on ? Color.rgb(52, 199, 89) : Color.rgb(255, 59, 48));
         btnEnable.setVisibility(on ? View.GONE : View.VISIBLE);
+        if (on) KeepAliveService.start(this);
+        if (Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED && !askedNotif) {
+            askedNotif = true;
+            requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 5);
+        }
         int n = Prefs.sidebarApps(prefs).size();
         sidebarCount.setText(n == 1 ? "1 item in sidebar" : n + " items in sidebar");
         for (Runnable r : refreshers) r.run();
@@ -428,6 +455,46 @@ public class MainActivity extends Activity {
         if (enabled == null) return false;
         ComponentName cn = new ComponentName(this, AssistiveTouchService.class);
         return enabled.contains(cn.flattenToString()) || enabled.contains(cn.flattenToShortString());
+    }
+
+    private Button actionButton(String text, Runnable r) {
+        Button b = new Button(this);
+        b.setText(text);
+        b.setAllCaps(false);
+        b.setOnClickListener(v -> r.run());
+        return b;
+    }
+
+    private boolean tryStart(Intent i) {
+        try {
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private void openAutostart() {
+        Intent mi = new Intent().setComponent(new ComponentName("com.miui.securitycenter",
+                "com.miui.permcenter.autostart.AutoStartManagementActivity"));
+        if (tryStart(mi)) return;
+        Toast.makeText(this, "Turn on Autostart / Background activity for AssistiveTouch here", Toast.LENGTH_LONG).show();
+        tryStart(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName())));
+    }
+
+    private void openBatterySettings() {
+        Intent mi = new Intent("miui.intent.action.HIDDEN_APPS_CONFIG_ACTIVITY");
+        mi.putExtra("package_name", getPackageName());
+        mi.putExtra("package_label", getString(R.string.app_name));
+        if (tryStart(mi)) {
+            Toast.makeText(this, "Choose \"No restrictions\"", Toast.LENGTH_LONG).show();
+            return;
+        }
+        Intent std = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                Uri.parse("package:" + getPackageName()));
+        if (tryStart(std)) return;
+        tryStart(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName())));
     }
 
     private int dp(int v) {
