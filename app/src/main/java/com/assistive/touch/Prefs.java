@@ -25,11 +25,23 @@ public final class Prefs {
     public static final String KEY_X = "pos_x";
     public static final String KEY_Y = "pos_y";
 
+    // Button appearance
+    public static final String KEY_BG_COLOR = "btn_bg_color";
+    public static final String KEY_BG_ALPHA = "btn_bg_alpha";
+    public static final String KEY_ICON_COLOR = "btn_icon_color";
+    public static final String KEY_SHAPE = "btn_shape";      // "rounded" or "circle"
+    public static final String KEY_PHOTO = "btn_photo";      // timestamp, 0 = no photo
+    public static final String PHOTO_FILE = "button_photo.png";
+    public static final int DEFAULT_BG_COLOR = 0xFF1E1E1E;
+    public static final int DEFAULT_ICON_COLOR = 0xFFFFFFFF;
+    public static final int DEFAULT_BG_ALPHA = 80;
+
     // App sidebar
     public static final String KEY_SIDEBAR_APPS = "sidebar_apps";
 
     // Edge bars: keys look like edge_L_tap, edge_R_len ...
     public static final String EDGE_PREFIX = "edge_";
+    public static final String KEY_EDGE_MASTER = "edge_master"; // master on/off for both side bars
     public static final String LEFT = "L";
     public static final String RIGHT = "R";
 
@@ -47,7 +59,7 @@ public final class Prefs {
     }
 
     public static boolean edgeEnabled(SharedPreferences p, String side) {
-        return p.getBoolean(edgeKey(side, "enabled"), false);
+        return p.getBoolean(KEY_EDGE_MASTER, true) && p.getBoolean(edgeKey(side, "enabled"), false);
     }
 
     public static int edgeInt(SharedPreferences p, String side, String name) {

@@ -157,7 +157,25 @@ public class AssistiveTouchService extends AccessibilityService
             case Prefs.KEY_IDLE_ALPHA:
                 wake();
                 break;
+            case Prefs.KEY_BG_COLOR:
+            case Prefs.KEY_BG_ALPHA:
+            case Prefs.KEY_ICON_COLOR:
+            case Prefs.KEY_SHAPE:
+            case Prefs.KEY_PHOTO:
+                if (button != null) {
+                    button.loadStyle();
+                    wake();
+                }
+                break;
         }
+    }
+
+    /** Called by the Quick Settings tile: close the panel, then show the app sidebar. */
+    public void openSidebarFromTile() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            performGlobalAction(GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE);
+        }
+        handler.postDelayed(() -> showSidebar(buttonSide()), 400);
     }
 
     // ================================================================ floating button
