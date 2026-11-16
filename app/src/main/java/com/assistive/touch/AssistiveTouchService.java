@@ -245,7 +245,7 @@ public class AssistiveTouchService extends AccessibilityService
                 if (a != Action.NONE) {
                     view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
                     view.animate().scaleX(1f).scaleY(1f).setDuration(100).start();
-                    run(a);
+                    ButtonHolder.this.run(a);
                 }
             }
         };
