@@ -32,16 +32,18 @@ import java.io.InputStream;
 public class CropActivity extends Activity {
 
     private CropView cropView;
+    private int index;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setTitle("Crop photo");
+        index = getIntent().getIntExtra("index", 0);
 
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.BLACK);
         cropView = new CropView(this,
-                "circle".equals(Prefs.get(this).getString(Prefs.KEY_SHAPE, "rounded")));
+                "circle".equals(Prefs.get(this).getString(Prefs.bkey(index, Prefs.KEY_SHAPE), "rounded")));
         root.addView(cropView, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
@@ -97,13 +99,13 @@ public class CropActivity extends Activity {
     private void save() {
         Bitmap out = cropView.crop(256);
         if (out == null) return;
-        try (FileOutputStream fo = new FileOutputStream(FloatingButtonView.photoFile(this))) {
+        try (FileOutputStream fo = new FileOutputStream(FloatingButtonView.photoFile(this, index))) {
             out.compress(Bitmap.CompressFormat.PNG, 100, fo);
         } catch (Exception e) {
             Toast.makeText(this, "Couldn't save photo", Toast.LENGTH_SHORT).show();
             return;
         }
-        Prefs.get(this).edit().putLong(Prefs.KEY_PHOTO, System.currentTimeMillis()).apply();
+        Prefs.get(this).edit().putLong(Prefs.bkey(index, Prefs.KEY_PHOTO), System.currentTimeMillis()).apply();
         finish();
     }
 

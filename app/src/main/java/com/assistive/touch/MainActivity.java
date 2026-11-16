@@ -42,6 +42,9 @@ public class MainActivity extends Activity {
     private Button btnEnable;
     private TextView sidebarCount;
     private FloatingButtonView preview;
+    private LinearLayout buttonSection;
+    private final Button[] tabButtons = new Button[Prefs.BUTTON_COUNT];
+    private int currentButton;
     private final List<Runnable> refreshers = new ArrayList<>();
     private static final int REQ_PHOTO = 41;
 
@@ -83,30 +86,40 @@ public class MainActivity extends Activity {
                 Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName()))));
         root.addView(appInfo);
 
-        // ---- floating button
-        root.addView(header("Floating button"));
-        LinearLayout fb = card(root);
-        switchRow(fb, "Show floating button", Prefs.KEY_ENABLED, true);
-        seekRow(fb, "Button size", Prefs.KEY_SIZE, 40, 80, Prefs.DEFAULT_SIZE, "%d dp");
-        seekRow(fb, "Idle opacity", Prefs.KEY_IDLE_ALPHA, 20, 100, Prefs.DEFAULT_IDLE_ALPHA, "%d%%");
-        fb.addView(note("Swipe = a quick flick on the button. A slow drag moves the button."));
-        actionRow(fb, "Single tap", Prefs.KEY_TAP);
-        actionRow(fb, "Double tap", Prefs.KEY_DOUBLE);
-        actionRow(fb, "Triple tap", Prefs.KEY_TRIPLE);
-        actionRow(fb, "Long press", Prefs.KEY_LONG);
-        actionRow(fb, "Swipe up", Prefs.KEY_SWIPE_UP);
-        actionRow(fb, "Swipe down", Prefs.KEY_SWIPE_DOWN);
-        actionRow(fb, "Swipe left", Prefs.KEY_SWIPE_LEFT);
-        actionRow(fb, "Swipe right", Prefs.KEY_SWIPE_RIGHT);
+        // ---- floating buttons
+        root.addView(header("Floating buttons"));
+        LinearLayout gm = card(root);
+        switchRow(gm, "Floating buttons on (master switch)", Prefs.KEY_BUTTONS_MASTER, true);
+        switchRow(gm, "Hide buttons in Power + Volume Down screenshots", Prefs.KEY_HIDE_ON_VOLUME, true);
+        gm.addView(note("The Screenshot action always hides all buttons and side bars first. "
+                + "Hiding also happens for a moment whenever Volume Down is pressed."));
 
-        // ---- appearance
-        appearanceSection(root);
+        LinearLayout tabs = new LinearLayout(this);
+        tabs.setOrientation(LinearLayout.HORIZONTAL);
+        tabs.setPadding(0, dp(12), 0, 0);
+        for (int i = 0; i < Prefs.BUTTON_COUNT; i++) {
+            final int idx = i;
+            Button t = new Button(this);
+            t.setText("Button " + (i + 1));
+            t.setAllCaps(false);
+            t.setOnClickListener(v -> selectButton(idx));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(44), 1f);
+            lp.leftMargin = dp(3);
+            lp.rightMargin = dp(3);
+            tabs.addView(t, lp);
+            tabButtons[i] = t;
+        }
+        root.addView(tabs);
+        buttonSection = new LinearLayout(this);
+        buttonSection.setOrientation(LinearLayout.VERTICAL);
+        root.addView(buttonSection);
+        selectButton(0);
 
         // ---- quick settings tiles
         root.addView(header("Quick Settings tiles"));
         LinearLayout qs = card(root);
         qs.addView(note("Pull down Quick Settings, tap the pencil / Edit icon and drag these tiles in: "
-                + "\"Floating button\" (on/off), \"Side bars\" (on/off) and \"App Sidebar\" (opens your apps)."));
+                + "\"Floating buttons\" (on/off), \"Side bars\" (on/off) and \"App Sidebar\" (opens your apps)."));
 
         // ---- edge bars
         root.addView(header("Side bars"));
@@ -143,8 +156,39 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------ appearance
 
-    private void appearanceSection(LinearLayout root) {
-        root.addView(header("Button appearance"));
+    /** Show the settings of one floating button (1, 2 or 3). */
+    private void selectButton(int index) {
+        currentButton = index;
+        for (int i = 0; i < tabButtons.length; i++) {
+            GradientDrawable g = new GradientDrawable();
+            g.setCornerRadius(dp(10));
+            g.setColor(i == index ? 0xFF3A5BA9 : 0xFFFFFFFF);
+            tabButtons[i].setBackground(g);
+            tabButtons[i].setTextColor(i == index ? Color.WHITE : 0xFF3A5BA9);
+        }
+        buttonSection.removeAllViews();
+        String n = "Button " + (index + 1);
+
+        buttonSection.addView(header(n + " — actions"));
+        LinearLayout fb = card(buttonSection);
+        switchRow(fb, "Show " + n, Prefs.bkey(index, Prefs.KEY_ENABLED), index == 0);
+        seekRow(fb, "Button size", Prefs.bkey(index, Prefs.KEY_SIZE), 40, 80, Prefs.DEFAULT_SIZE, "%d dp");
+        seekRow(fb, "Idle opacity", Prefs.bkey(index, Prefs.KEY_IDLE_ALPHA), 20, 100, Prefs.DEFAULT_IDLE_ALPHA, "%d%%");
+        fb.addView(note("Swipe = a quick flick on the button. A slow drag moves the button."));
+        actionRow(fb, "Single tap", Prefs.bkey(index, Prefs.KEY_TAP));
+        actionRow(fb, "Double tap", Prefs.bkey(index, Prefs.KEY_DOUBLE));
+        actionRow(fb, "Triple tap", Prefs.bkey(index, Prefs.KEY_TRIPLE));
+        actionRow(fb, "Long press", Prefs.bkey(index, Prefs.KEY_LONG));
+        actionRow(fb, "Swipe up", Prefs.bkey(index, Prefs.KEY_SWIPE_UP));
+        actionRow(fb, "Swipe down", Prefs.bkey(index, Prefs.KEY_SWIPE_DOWN));
+        actionRow(fb, "Swipe left", Prefs.bkey(index, Prefs.KEY_SWIPE_LEFT));
+        actionRow(fb, "Swipe right", Prefs.bkey(index, Prefs.KEY_SWIPE_RIGHT));
+
+        appearanceSection(buttonSection, index);
+    }
+
+    private void appearanceSection(LinearLayout root, int index) {
+        root.addView(header("Button " + (index + 1) + " — appearance"));
         LinearLayout c = card(root);
 
         FrameLayout box = new FrameLayout(this);
@@ -153,7 +197,7 @@ public class MainActivity extends Activity {
         boxBg.setColor(0xFFB0B4BA);
         boxBg.setCornerRadius(dp(12));
         box.setBackground(boxBg);
-        preview = new FloatingButtonView(this);
+        preview = new FloatingButtonView(this, index);
         box.addView(preview, new FrameLayout.LayoutParams(dp(64), dp(64), Gravity.CENTER));
         c.addView(box, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(96)));
 
@@ -172,25 +216,25 @@ public class MainActivity extends Activity {
         Button clear = new Button(this);
         clear.setText("Remove photo");
         clear.setOnClickListener(v -> {
-            FloatingButtonView.photoFile(this).delete();
-            prefs.edit().putLong(Prefs.KEY_PHOTO, 0).apply();
+            FloatingButtonView.photoFile(this, index).delete();
+            prefs.edit().putLong(Prefs.bkey(index, Prefs.KEY_PHOTO), 0).apply();
             preview.loadStyle();
         });
         photoRow.addView(pick, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         photoRow.addView(clear, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         c.addView(photoRow);
 
-        colorRow(c, "Button colour", Prefs.KEY_BG_COLOR, Prefs.DEFAULT_BG_COLOR);
-        colorRow(c, "Icon colour", Prefs.KEY_ICON_COLOR, Prefs.DEFAULT_ICON_COLOR);
-        seekRow(c, "Button colour opacity", Prefs.KEY_BG_ALPHA, 10, 100, Prefs.DEFAULT_BG_ALPHA, "%d%%");
+        colorRow(c, "Button colour", Prefs.bkey(index, Prefs.KEY_BG_COLOR), Prefs.DEFAULT_BG_COLOR);
+        colorRow(c, "Icon colour", Prefs.bkey(index, Prefs.KEY_ICON_COLOR), Prefs.DEFAULT_ICON_COLOR);
+        seekRow(c, "Button colour opacity", Prefs.bkey(index, Prefs.KEY_BG_ALPHA), 10, 100, Prefs.DEFAULT_BG_ALPHA, "%d%%");
 
         Switch round = new Switch(this);
         round.setText("Circle shape");
         round.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
         round.setPadding(0, dp(10), 0, dp(10));
-        round.setChecked("circle".equals(prefs.getString(Prefs.KEY_SHAPE, "rounded")));
+        round.setChecked("circle".equals(prefs.getString(Prefs.bkey(index, Prefs.KEY_SHAPE), "rounded")));
         round.setOnCheckedChangeListener((b, on) -> {
-            prefs.edit().putString(Prefs.KEY_SHAPE, on ? "circle" : "rounded").apply();
+            prefs.edit().putString(Prefs.bkey(index, Prefs.KEY_SHAPE), on ? "circle" : "rounded").apply();
             preview.loadStyle();
         });
         c.addView(round);
@@ -244,6 +288,7 @@ public class MainActivity extends Activity {
         if (requestCode != REQ_PHOTO || resultCode != RESULT_OK || data == null || data.getData() == null) return;
         Intent crop = new Intent(this, CropActivity.class);
         crop.setData(data.getData());
+        crop.putExtra("index", currentButton);
         crop.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         startActivity(crop);
     }

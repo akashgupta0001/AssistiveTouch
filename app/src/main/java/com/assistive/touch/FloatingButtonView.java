@@ -30,26 +30,29 @@ public class FloatingButtonView extends View {
     private boolean circle;
     private Bitmap photo;
 
-    public FloatingButtonView(Context context) {
+    private final int index;
+
+    public FloatingButtonView(Context context, int index) {
         super(context);
+        this.index = index;
         setContentDescription(context.getString(R.string.app_name));
         loadStyle();
     }
 
-    public static File photoFile(Context c) {
-        return new File(c.getFilesDir(), Prefs.PHOTO_FILE);
+    public static File photoFile(Context c, int index) {
+        return new File(c.getFilesDir(), Prefs.photoFileName(index));
     }
 
     /** Re-read colours, shape and photo from settings. */
     public void loadStyle() {
         SharedPreferences p = Prefs.get(getContext());
-        bgColor = p.getInt(Prefs.KEY_BG_COLOR, Prefs.DEFAULT_BG_COLOR);
-        bgAlpha = p.getInt(Prefs.KEY_BG_ALPHA, Prefs.DEFAULT_BG_ALPHA);
-        iconColor = p.getInt(Prefs.KEY_ICON_COLOR, Prefs.DEFAULT_ICON_COLOR);
-        circle = "circle".equals(p.getString(Prefs.KEY_SHAPE, "rounded"));
+        bgColor = p.getInt(Prefs.bkey(index, Prefs.KEY_BG_COLOR), Prefs.DEFAULT_BG_COLOR);
+        bgAlpha = p.getInt(Prefs.bkey(index, Prefs.KEY_BG_ALPHA), Prefs.DEFAULT_BG_ALPHA);
+        iconColor = p.getInt(Prefs.bkey(index, Prefs.KEY_ICON_COLOR), Prefs.DEFAULT_ICON_COLOR);
+        circle = "circle".equals(p.getString(Prefs.bkey(index, Prefs.KEY_SHAPE), "rounded"));
         photo = null;
-        if (p.getLong(Prefs.KEY_PHOTO, 0) != 0) {
-            File f = photoFile(getContext());
+        if (p.getLong(Prefs.bkey(index, Prefs.KEY_PHOTO), 0) != 0) {
+            File f = photoFile(getContext(), index);
             if (f.exists()) {
                 try { photo = BitmapFactory.decodeFile(f.getPath()); } catch (Throwable ignored) { }
             }

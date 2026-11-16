@@ -47,6 +47,11 @@ public final class Prefs {
     public static final String LEFT = "L";
     public static final String RIGHT = "R";
 
+    // Multiple floating buttons: button 0 uses the plain keys, buttons 1 and 2 add "_b1" / "_b2".
+    public static final int BUTTON_COUNT = 3;
+    public static final String KEY_BUTTONS_MASTER = "buttons_master";
+    public static final String KEY_HIDE_ON_VOLUME = "hide_on_vol_down";
+
     public static final int DEFAULT_SIZE = 56;       // dp
     public static final int DEFAULT_IDLE_ALPHA = 45; // percent
 
@@ -54,6 +59,28 @@ public final class Prefs {
 
     public static SharedPreferences get(Context c) {
         return c.getSharedPreferences(NAME, Context.MODE_PRIVATE);
+    }
+
+    public static String bkey(int index, String base) {
+        return index == 0 ? base : base + "_b" + index;
+    }
+
+    public static int buttonIndexOfKey(String key) {
+        for (int i = 1; i < BUTTON_COUNT; i++) if (key.endsWith("_b" + i)) return i;
+        return 0;
+    }
+
+    public static String baseKey(String key) {
+        int i = buttonIndexOfKey(key);
+        return i == 0 ? key : key.substring(0, key.length() - ("_b" + i).length());
+    }
+
+    public static boolean buttonEnabled(SharedPreferences p, int index) {
+        return p.getBoolean(KEY_BUTTONS_MASTER, true) && p.getBoolean(bkey(index, KEY_ENABLED), index == 0);
+    }
+
+    public static String photoFileName(int index) {
+        return index == 0 ? PHOTO_FILE : "button_photo_" + index + ".png";
     }
 
     public static String edgeKey(String side, String name) {
@@ -79,7 +106,7 @@ public final class Prefs {
     }
 
     public static String defaultActionId(String key) {
-        if (KEY_TAP.equals(key)) return Action.MENU.id;
+        if (KEY_TAP.equals(baseKey(key))) return Action.MENU.id;
         if (key.startsWith(EDGE_PREFIX) && (key.endsWith("_tap") || key.endsWith("_in"))) {
             return Action.SIDEBAR.id;
         }

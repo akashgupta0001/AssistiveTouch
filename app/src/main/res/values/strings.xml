@@ -2,7 +2,7 @@
 <resources>
     <string name="app_name">AssistiveTouch</string>
     <string name="service_label">AssistiveTouch</string>
-    <string name="service_description">Shows a floating iPhone-style AssistiveTouch button. It uses accessibility only to perform actions you tap (Home, Back, Recents, Screenshot, Lock screen and more). It does not read your screen content.</string>
+    <string name="service_description">Shows a floating iPhone-style AssistiveTouch button. It uses accessibility only to perform actions you tap (Home, Back, Recents, Screenshot, Lock screen and more). It watches only the Volume Down key, to hide the buttons during Power + Volume screenshots (key presses are never blocked or stored). It does not read your screen content.</string>
 
     <string name="status_on">AssistiveTouch is ON</string>
     <string name="status_off">AssistiveTouch is OFF</string>

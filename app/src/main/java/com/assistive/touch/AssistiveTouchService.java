@@ -26,6 +26,7 @@ import android.util.TypedValue;
 import android.view.Display;
 import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
+import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
@@ -54,11 +55,11 @@ public class AssistiveTouchService extends AccessibilityService
     private WindowManager wm;
     private SharedPreferences prefs;
 
-    private FloatingButtonView button;
-    private WindowManager.LayoutParams bp;
+    private final ButtonHolder[] buttons = new ButtonHolder[Prefs.BUTTON_COUNT];
     private View menuRoot;
     private View sidebarRoot;
-    private ValueAnimator snapAnim;
+    private int menuSide = Gravity.RIGHT;
+    private boolean capturing;
     private final View[] edgeViews = new View[2]; // 0 = left, 1 = right
     private long highlightUntil;
     private final Runnable endHighlight = this::rebuildEdges;
@@ -66,10 +67,6 @@ public class AssistiveTouchService extends AccessibilityService
     private CameraManager cameraManager;
     private String torchId;
     private boolean torchOn;
-
-    private final Runnable goIdle = () -> {
-        if (button != null) button.animate().alpha(idleAlpha()).setDuration(400).start();
-    };
 
     private final CameraManager.TorchCallback torchCallback = new CameraManager.TorchCallback() {
         @Override
@@ -88,7 +85,7 @@ public class AssistiveTouchService extends AccessibilityService
         prefs = Prefs.get(this);
         prefs.registerOnSharedPreferenceChangeListener(this);
         setupTorch();
-        if (prefs.getBoolean(Prefs.KEY_ENABLED, true)) showButton();
+        syncButtons();
         rebuildEdges();
     }
 
@@ -115,7 +112,7 @@ public class AssistiveTouchService extends AccessibilityService
         handler.removeCallbacksAndMessages(null);
         hideMenu();
         hideSidebar();
-        removeButton();
+        for (int i = 0; i < buttons.length; i++) removeButton(i);
         removeEdges();
         if (prefs != null) prefs.unregisterOnSharedPreferenceChangeListener(this);
         if (cameraManager != null && torchId != null) {
@@ -129,7 +126,7 @@ public class AssistiveTouchService extends AccessibilityService
         hideMenu();
         hideSidebar();
         handler.postDelayed(() -> {
-            if (button != null) snapToEdge();
+            for (ButtonHolder h : buttons) if (h != null) h.snapToEdge();
             rebuildEdges();
         }, 300);
     }
@@ -139,7 +136,7 @@ public class AssistiveTouchService extends AccessibilityService
         if (key == null) return;
         if (key.startsWith(Prefs.EDGE_PREFIX)) {
             if (key.endsWith("_len") || key.endsWith("_thick") || key.endsWith("_pos")
-                    || key.endsWith("_alpha") || key.endsWith("_enabled")) {
+                    || key.endsWith("_alpha") || key.endsWith("_enabled") || key.equals(Prefs.KEY_EDGE_MASTER)) {
                 // Show the bar strongly for a moment so its size and position are easy to see.
                 highlightUntil = System.currentTimeMillis() + 2500;
                 handler.removeCallbacks(endHighlight);
@@ -148,33 +145,34 @@ public class AssistiveTouchService extends AccessibilityService
             rebuildEdges();
             return;
         }
-        switch (key) {
+        if (key.equals(Prefs.KEY_BUTTONS_MASTER)) {
+            syncButtons();
+            return;
+        }
+        int index = Prefs.buttonIndexOfKey(key);
+        String base = Prefs.baseKey(key);
+        ButtonHolder h = buttons[index];
+        switch (base) {
             case Prefs.KEY_ENABLED:
-                if (sp.getBoolean(Prefs.KEY_ENABLED, true)) showButton();
-                else { hideMenu(); removeButton(); }
+                syncButtons();
                 break;
             case Prefs.KEY_SIZE:
-                if (button != null) {
-                    int s = dp(sp.getInt(Prefs.KEY_SIZE, Prefs.DEFAULT_SIZE));
-                    bp.width = s;
-                    bp.height = s;
-                    safeUpdate();
-                    snapToEdge();
-                    wake();
-                }
+                if (h != null) h.resize();
                 break;
             case Prefs.KEY_IDLE_ALPHA:
-                wake();
+                if (h != null) h.wake();
                 break;
             case Prefs.KEY_BG_COLOR:
             case Prefs.KEY_BG_ALPHA:
             case Prefs.KEY_ICON_COLOR:
             case Prefs.KEY_SHAPE:
             case Prefs.KEY_PHOTO:
-                if (button != null) {
-                    button.loadStyle();
-                    wake();
+                if (h != null) {
+                    h.view.loadStyle();
+                    h.wake();
                 }
+                break;
+            default:
                 break;
         }
     }
@@ -184,102 +182,47 @@ public class AssistiveTouchService extends AccessibilityService
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             performGlobalAction(GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE);
         }
-        handler.postDelayed(() -> showSidebar(buttonSide()), 400);
+        handler.postDelayed(() -> showSidebar(Gravity.RIGHT), 400);
     }
 
-    // ================================================================ floating button
+    // ================================================================ floating buttons
 
-    private void showButton() {
-        if (button != null || wm == null) return;
-        int size = dp(prefs.getInt(Prefs.KEY_SIZE, Prefs.DEFAULT_SIZE));
-        Point screen = screenSize();
-
-        bp = overlayParams(size, size, false);
-        bp.gravity = Gravity.TOP | Gravity.START;
-        bp.x = prefs.getInt(Prefs.KEY_X, screen.x - size - dp(4));
-        bp.y = prefs.getInt(Prefs.KEY_Y, screen.y / 3);
-        clampPosition(screen);
-
-        button = new FloatingButtonView(this);
-        button.setOnTouchListener(new ButtonTouch());
-        try {
-            wm.addView(button, bp);
-        } catch (Exception e) {
-            button = null;
-            return;
+    private void syncButtons() {
+        if (wm == null || prefs == null) return;
+        for (int i = 0; i < buttons.length; i++) {
+            boolean want = Prefs.buttonEnabled(prefs, i);
+            if (want && buttons[i] == null) addButton(i);
+            else if (!want && buttons[i] != null) removeButton(i);
         }
-        button.setAlpha(0f);
-        button.animate().alpha(1f).setDuration(200).start();
-        scheduleIdle();
+        if (menuRoot == null && sidebarRoot == null) return;
+        setButtonsVisible(false);
     }
 
-    private void removeButton() {
-        if (snapAnim != null) snapAnim.cancel();
-        if (button != null) {
-            try { wm.removeView(button); } catch (Exception ignored) { }
-            button = null;
+    private void addButton(int index) {
+        ButtonHolder h = new ButtonHolder(index);
+        if (h.attach()) buttons[index] = h;
+    }
+
+    private void removeButton(int index) {
+        if (buttons[index] != null) {
+            buttons[index].detach();
+            buttons[index] = null;
         }
     }
 
-    private void safeUpdate() {
-        if (button != null && button.isAttachedToWindow()) {
-            try { wm.updateViewLayout(button, bp); } catch (Exception ignored) { }
+    private void setButtonsVisible(boolean visible) {
+        for (ButtonHolder h : buttons) {
+            if (h != null) h.view.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
         }
     }
 
-    private void scheduleIdle() {
-        handler.removeCallbacks(goIdle);
-        handler.postDelayed(goIdle, IDLE_DELAY_MS);
-    }
+    /** One floating button with its own position, look and actions. */
+    private class ButtonHolder implements View.OnTouchListener {
+        final int index;
+        final FloatingButtonView view;
+        final WindowManager.LayoutParams lp;
+        private ValueAnimator snapAnim;
 
-    private void wake() {
-        if (button == null) return;
-        button.animate().cancel();
-        button.setAlpha(1f);
-        scheduleIdle();
-    }
-
-    private float idleAlpha() {
-        return prefs.getInt(Prefs.KEY_IDLE_ALPHA, Prefs.DEFAULT_IDLE_ALPHA) / 100f;
-    }
-
-    private void clampPosition(Point screen) {
-        int m = dp(4);
-        bp.x = Math.max(m, Math.min(bp.x, screen.x - bp.width - m));
-        bp.y = Math.max(m, Math.min(bp.y, screen.y - bp.height - m));
-    }
-
-    private void snapToEdge() {
-        if (button == null) return;
-        Point screen = screenSize();
-        clampPosition(screen);
-        int m = dp(4);
-        int target = (bp.x + bp.width / 2 < screen.x / 2) ? m : screen.x - bp.width - m;
-
-        if (snapAnim != null) snapAnim.cancel();
-        snapAnim = ValueAnimator.ofInt(bp.x, target);
-        snapAnim.setDuration(260);
-        snapAnim.setInterpolator(new DecelerateInterpolator());
-        snapAnim.addUpdateListener(a -> {
-            bp.x = (int) a.getAnimatedValue();
-            safeUpdate();
-        });
-        snapAnim.start();
-        prefs.edit().putInt(Prefs.KEY_X, target).putInt(Prefs.KEY_Y, bp.y).apply();
-    }
-
-    /** Which side of the screen the floating button is on. */
-    private int buttonSide() {
-        if (button == null || bp == null) return Gravity.RIGHT;
-        return (bp.x + bp.width / 2 < screenSize().x / 2) ? Gravity.LEFT : Gravity.RIGHT;
-    }
-
-    /**
-     * Gestures on the floating button:
-     * tap / double / triple tap, long press, quick flick up/down/left/right.
-     * A slow drag (or a flick with no action set) moves the button.
-     */
-    private class ButtonTouch implements View.OnTouchListener {
         private float downX, downY;
         private int startX, startY;
         private long downTime;
@@ -287,21 +230,137 @@ public class AssistiveTouchService extends AccessibilityService
         private int tapCount;
         private int slop;
 
-        private final Runnable longPress = () -> {
-            longFired = true;
-            Action a = Prefs.action(prefs, Prefs.KEY_LONG);
-            if (a != Action.NONE && button != null) {
-                button.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
-                button.animate().scaleX(1f).scaleY(1f).setDuration(100).start();
-                perform(a, buttonSide());
+        private final Runnable goIdle = new Runnable() {
+            @Override
+            public void run() {
+                view.animate().alpha(idleAlpha()).setDuration(400).start();
             }
         };
 
-        private final Runnable resolveTaps = () -> {
-            int n = tapCount;
-            tapCount = 0;
-            fireTaps(n);
+        private final Runnable longPress = new Runnable() {
+            @Override
+            public void run() {
+                longFired = true;
+                Action a = action(Prefs.KEY_LONG);
+                if (a != Action.NONE) {
+                    view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+                    view.animate().scaleX(1f).scaleY(1f).setDuration(100).start();
+                    run(a);
+                }
+            }
         };
+
+        private final Runnable resolveTaps = new Runnable() {
+            @Override
+            public void run() {
+                int n = tapCount;
+                tapCount = 0;
+                fireTaps(n);
+            }
+        };
+
+        ButtonHolder(int index) {
+            this.index = index;
+            this.view = new FloatingButtonView(AssistiveTouchService.this, index);
+            int size = dp(prefs.getInt(key(Prefs.KEY_SIZE), Prefs.DEFAULT_SIZE));
+            Point screen = screenSize();
+            lp = overlayParams(size, size, false);
+            lp.gravity = Gravity.TOP | Gravity.START;
+            lp.x = prefs.getInt(key(Prefs.KEY_X), screen.x - size - dp(4));
+            lp.y = prefs.getInt(key(Prefs.KEY_Y), screen.y / 3 + index * (size + dp(16)));
+            clamp(screen);
+            view.setOnTouchListener(this);
+        }
+
+        String key(String base) {
+            return Prefs.bkey(index, base);
+        }
+
+        Action action(String base) {
+            return Prefs.action(prefs, key(base));
+        }
+
+        boolean attach() {
+            try {
+                wm.addView(view, lp);
+            } catch (Exception e) {
+                return false;
+            }
+            view.setAlpha(0f);
+            view.animate().alpha(1f).setDuration(200).start();
+            scheduleIdle();
+            return true;
+        }
+
+        void detach() {
+            if (snapAnim != null) snapAnim.cancel();
+            handler.removeCallbacks(goIdle);
+            handler.removeCallbacks(longPress);
+            handler.removeCallbacks(resolveTaps);
+            try { wm.removeView(view); } catch (Exception ignored) { }
+        }
+
+        void update() {
+            if (view.isAttachedToWindow()) {
+                try { wm.updateViewLayout(view, lp); } catch (Exception ignored) { }
+            }
+        }
+
+        void resize() {
+            int s = dp(prefs.getInt(key(Prefs.KEY_SIZE), Prefs.DEFAULT_SIZE));
+            lp.width = s;
+            lp.height = s;
+            update();
+            snapToEdge();
+            wake();
+        }
+
+        float idleAlpha() {
+            return prefs.getInt(key(Prefs.KEY_IDLE_ALPHA), Prefs.DEFAULT_IDLE_ALPHA) / 100f;
+        }
+
+        void scheduleIdle() {
+            handler.removeCallbacks(goIdle);
+            handler.postDelayed(goIdle, IDLE_DELAY_MS);
+        }
+
+        void wake() {
+            view.animate().cancel();
+            view.setAlpha(1f);
+            scheduleIdle();
+        }
+
+        void clamp(Point screen) {
+            int m = dp(4);
+            lp.x = Math.max(m, Math.min(lp.x, screen.x - lp.width - m));
+            lp.y = Math.max(m, Math.min(lp.y, screen.y - lp.height - m));
+        }
+
+        void snapToEdge() {
+            Point screen = screenSize();
+            clamp(screen);
+            int m = dp(4);
+            int target = (lp.x + lp.width / 2 < screen.x / 2) ? m : screen.x - lp.width - m;
+            if (snapAnim != null) snapAnim.cancel();
+            snapAnim = ValueAnimator.ofInt(lp.x, target);
+            snapAnim.setDuration(260);
+            snapAnim.setInterpolator(new DecelerateInterpolator());
+            snapAnim.addUpdateListener(a -> {
+                lp.x = (int) a.getAnimatedValue();
+                update();
+            });
+            snapAnim.start();
+            prefs.edit().putInt(key(Prefs.KEY_X), target).putInt(key(Prefs.KEY_Y), lp.y).apply();
+        }
+
+        int side() {
+            return (lp.x + lp.width / 2 < screenSize().x / 2) ? Gravity.LEFT : Gravity.RIGHT;
+        }
+
+        void run(Action a) {
+            menuSide = side();
+            perform(a, menuSide);
+        }
 
         @Override
         public boolean onTouch(View v, MotionEvent e) {
@@ -316,12 +375,12 @@ public class AssistiveTouchService extends AccessibilityService
                     v.animate().scaleX(0.9f).scaleY(0.9f).setDuration(80).start();
                     downX = e.getRawX();
                     downY = e.getRawY();
-                    startX = bp.x;
-                    startY = bp.y;
+                    startX = lp.x;
+                    startY = lp.y;
                     downTime = e.getEventTime();
                     dragging = false;
                     longFired = false;
-                    if (Prefs.action(prefs, Prefs.KEY_LONG) != Action.NONE) {
+                    if (action(Prefs.KEY_LONG) != Action.NONE) {
                         handler.postDelayed(longPress, ViewConfiguration.getLongPressTimeout());
                     }
                     return true;
@@ -336,9 +395,9 @@ public class AssistiveTouchService extends AccessibilityService
                         handler.removeCallbacks(longPress);
                     }
                     if (dragging) {
-                        bp.x = startX + (int) dx;
-                        bp.y = startY + (int) dy;
-                        safeUpdate();
+                        lp.x = startX + (int) dx;
+                        lp.y = startY + (int) dy;
+                        update();
                     }
                     return true;
 
@@ -351,7 +410,7 @@ public class AssistiveTouchService extends AccessibilityService
                         return true;
                     }
                     if (dragging) {
-                        handleDragEnd(e);
+                        dragEnd(e);
                     } else {
                         tapCount++;
                         if (tapCount >= maxTaps()) {
@@ -375,37 +434,35 @@ public class AssistiveTouchService extends AccessibilityService
             return false;
         }
 
-        private void handleDragEnd(MotionEvent e) {
+        private void dragEnd(MotionEvent e) {
             float dx = e.getRawX() - downX;
             float dy = e.getRawY() - downY;
             long dt = e.getEventTime() - downTime;
-            String key;
-            if (Math.abs(dx) > Math.abs(dy)) key = dx > 0 ? Prefs.KEY_SWIPE_RIGHT : Prefs.KEY_SWIPE_LEFT;
-            else key = dy > 0 ? Prefs.KEY_SWIPE_DOWN : Prefs.KEY_SWIPE_UP;
-            Action a = Prefs.action(prefs, key);
-
+            String base;
+            if (Math.abs(dx) > Math.abs(dy)) base = dx > 0 ? Prefs.KEY_SWIPE_RIGHT : Prefs.KEY_SWIPE_LEFT;
+            else base = dy > 0 ? Prefs.KEY_SWIPE_DOWN : Prefs.KEY_SWIPE_UP;
+            Action a = action(base);
             if (dt <= FLICK_MAX_MS && Math.hypot(dx, dy) > dp(36) && a != Action.NONE) {
-                // Quick flick: run the action and put the button back where it was.
-                bp.x = startX;
-                bp.y = startY;
-                safeUpdate();
-                if (button != null) button.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
-                perform(a, buttonSide());
+                lp.x = startX;
+                lp.y = startY;
+                update();
+                view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+                run(a);
             } else {
                 snapToEdge();
             }
         }
 
         private int maxTaps() {
-            if (Prefs.action(prefs, Prefs.KEY_TRIPLE) != Action.NONE) return 3;
-            if (Prefs.action(prefs, Prefs.KEY_DOUBLE) != Action.NONE) return 2;
+            if (action(Prefs.KEY_TRIPLE) != Action.NONE) return 3;
+            if (action(Prefs.KEY_DOUBLE) != Action.NONE) return 2;
             return 1;
         }
 
         private void fireTaps(int n) {
-            String key = n <= 1 ? Prefs.KEY_TAP : (n == 2 ? Prefs.KEY_DOUBLE : Prefs.KEY_TRIPLE);
-            Action a = Prefs.action(prefs, key);
-            if (a != Action.NONE) perform(a, buttonSide());
+            String base = n <= 1 ? Prefs.KEY_TAP : (n == 2 ? Prefs.KEY_DOUBLE : Prefs.KEY_TRIPLE);
+            Action a = action(base);
+            if (a != Action.NONE) run(a);
         }
     }
 
@@ -554,7 +611,6 @@ public class AssistiveTouchService extends AccessibilityService
         if (wm == null) return;
         hideSidebar();
         if (menuRoot != null) return;
-        handler.removeCallbacks(goIdle);
 
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(0x33000000);
@@ -592,7 +648,7 @@ public class AssistiveTouchService extends AccessibilityService
             return;
         }
         menuRoot = root;
-        if (button != null) button.setVisibility(View.INVISIBLE);
+        setButtonsVisible(false);
 
         root.setAlpha(0f);
         root.animate().alpha(1f).setDuration(150).start();
@@ -617,7 +673,7 @@ public class AssistiveTouchService extends AccessibilityService
 
         cell.setContentDescription(getString(a.label));
         cell.setOnClickListener(v -> {
-            int side = buttonSide();
+            int side = menuSide;
             hideMenu();
             perform(a, side);
         });
@@ -699,7 +755,7 @@ public class AssistiveTouchService extends AccessibilityService
             return;
         }
         sidebarRoot = root;
-        if (button != null) button.setVisibility(View.INVISIBLE);
+        setButtonsVisible(false);
 
         root.setAlpha(0f);
         root.animate().alpha(1f).setDuration(150).start();
@@ -746,9 +802,9 @@ public class AssistiveTouchService extends AccessibilityService
     }
 
     private void restoreButton() {
-        if (button != null && menuRoot == null && sidebarRoot == null) {
-            button.setVisibility(View.VISIBLE);
-            wake();
+        if (menuRoot == null && sidebarRoot == null && !capturing) {
+            setButtonsVisible(true);
+            for (ButtonHolder h : buttons) if (h != null) h.wake();
         }
     }
 
@@ -775,6 +831,7 @@ public class AssistiveTouchService extends AccessibilityService
     // ================================================================ actions
 
     private void perform(Action a, int side) {
+        menuSide = side;
         switch (a) {
             case MENU:
                 showMenu();
@@ -834,15 +891,34 @@ public class AssistiveTouchService extends AccessibilityService
             toast(R.string.needs_android9);
             return;
         }
-        if (button != null) button.setVisibility(View.INVISIBLE);
+        hideForCapture(1800);
+        handler.postDelayed(() -> performGlobalAction(GLOBAL_ACTION_TAKE_SCREENSHOT), 350);
+    }
+
+    /** Hide all floating buttons and side bars for a moment so they are not in a screenshot. */
+    private void hideForCapture(long ms) {
+        capturing = true;
+        setButtonsVisible(false);
         setEdgesVisible(false);
-        handler.postDelayed(() -> {
-            performGlobalAction(GLOBAL_ACTION_TAKE_SCREENSHOT);
-            handler.postDelayed(() -> {
-                setEdgesVisible(true);
-                restoreButton();
-            }, 1500);
-        }, 350);
+        handler.removeCallbacks(endCapture);
+        handler.postDelayed(endCapture, ms);
+    }
+
+    private final Runnable endCapture = () -> {
+        capturing = false;
+        setEdgesVisible(true);
+        restoreButton();
+    };
+
+    @Override
+    protected boolean onKeyEvent(KeyEvent event) {
+        // Power + Volume Down screenshot: hide as soon as Volume Down is pressed.
+        if (event.getKeyCode() == KeyEvent.KEYCODE_VOLUME_DOWN
+                && event.getAction() == KeyEvent.ACTION_DOWN
+                && prefs != null && prefs.getBoolean(Prefs.KEY_HIDE_ON_VOLUME, true)) {
+            hideForCapture(2000);
+        }
+        return false; // never block the key
     }
 
     private void adjustVolume(int direction) {
