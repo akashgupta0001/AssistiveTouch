@@ -3,6 +3,7 @@ package com.assistive.touch;
 public enum Action {
     NONE("none", R.string.act_none, 0),
     MENU("menu", R.string.act_menu, R.drawable.ic_menu),
+    SIDEBAR("sidebar", R.string.act_sidebar, R.drawable.ic_apps),
     HOME("home", R.string.act_home, R.drawable.ic_home),
     BACK("back", R.string.act_back, R.drawable.ic_back),
     RECENTS("recents", R.string.act_recents, R.drawable.ic_recents),
@@ -27,18 +28,20 @@ public enum Action {
         this.icon = icon;
     }
 
-    /** Items shown in the pop-up menu, laid out 3 per row like iOS. */
+    /** Items shown in the pop-up menu, 3 per row like iOS. */
     public static final Action[] MENU_ITEMS = {
             NOTIFICATIONS, CONTROL_CENTRE, SCREENSHOT,
             BACK, HOME, RECENTS,
             VOLUME_DOWN, LOCK_SCREEN, VOLUME_UP,
-            FLASHLIGHT, POWER, SETTINGS
+            FLASHLIGHT, SIDEBAR, POWER,
+            SPLIT_SCREEN, SETTINGS
     };
 
-    /** Choices for double-tap / long-press. */
+    /** Choices for every gesture setting. */
     public static final Action[] GESTURE_CHOICES = {
-            NONE, MENU, HOME, BACK, RECENTS, NOTIFICATIONS, CONTROL_CENTRE,
-            SCREENSHOT, LOCK_SCREEN, POWER, VOLUME_UP, VOLUME_DOWN, FLASHLIGHT, SPLIT_SCREEN
+            NONE, MENU, SIDEBAR, HOME, BACK, RECENTS, NOTIFICATIONS, CONTROL_CENTRE,
+            SCREENSHOT, LOCK_SCREEN, POWER, VOLUME_UP, VOLUME_DOWN, FLASHLIGHT,
+            SPLIT_SCREEN, SETTINGS
     };
 
     public static Action fromId(String id) {

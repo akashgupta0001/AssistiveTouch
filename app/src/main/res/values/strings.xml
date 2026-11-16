@@ -18,6 +18,7 @@
 
     <string name="act_none">None</string>
     <string name="act_menu">Open Menu</string>
+    <string name="act_sidebar">App Sidebar</string>
     <string name="act_home">Home</string>
     <string name="act_back">Back</string>
     <string name="act_recents">Recents</string>

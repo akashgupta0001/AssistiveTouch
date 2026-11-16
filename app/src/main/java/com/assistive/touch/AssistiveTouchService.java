@@ -4,11 +4,13 @@ import android.accessibilityservice.AccessibilityService;
 import android.animation.ValueAnimator;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.graphics.Point;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
 import android.hardware.camera2.CameraCharacteristics;
@@ -22,7 +24,6 @@ import android.text.TextUtils;
 import android.util.DisplayMetrics;
 import android.util.TypedValue;
 import android.view.Display;
-import android.view.GestureDetector;
 import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
@@ -35,8 +36,11 @@ import android.view.animation.OvershootInterpolator;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+
+import java.util.List;
 
 public class AssistiveTouchService extends AccessibilityService
         implements SharedPreferences.OnSharedPreferenceChangeListener {
@@ -44,6 +48,7 @@ public class AssistiveTouchService extends AccessibilityService
     static AssistiveTouchService instance;
 
     private static final long IDLE_DELAY_MS = 3000;
+    private static final long FLICK_MAX_MS = 350;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private WindowManager wm;
@@ -52,17 +57,16 @@ public class AssistiveTouchService extends AccessibilityService
     private FloatingButtonView button;
     private WindowManager.LayoutParams bp;
     private View menuRoot;
+    private View sidebarRoot;
     private ValueAnimator snapAnim;
-    private GestureDetector gestures;
+    private final View[] edgeViews = new View[2]; // 0 = left, 1 = right
 
     private CameraManager cameraManager;
     private String torchId;
     private boolean torchOn;
 
     private final Runnable goIdle = () -> {
-        if (button != null) {
-            button.animate().alpha(idleAlpha()).setDuration(400).start();
-        }
+        if (button != null) button.animate().alpha(idleAlpha()).setDuration(400).start();
     };
 
     private final CameraManager.TorchCallback torchCallback = new CameraManager.TorchCallback() {
@@ -72,7 +76,7 @@ public class AssistiveTouchService extends AccessibilityService
         }
     };
 
-    // ---------------------------------------------------------------- lifecycle
+    // ================================================================ lifecycle
 
     @Override
     protected void onServiceConnected() {
@@ -81,9 +85,9 @@ public class AssistiveTouchService extends AccessibilityService
         wm = (WindowManager) getSystemService(WINDOW_SERVICE);
         prefs = Prefs.get(this);
         prefs.registerOnSharedPreferenceChangeListener(this);
-        setupGestures();
         setupTorch();
         if (prefs.getBoolean(Prefs.KEY_ENABLED, true)) showButton();
+        rebuildEdges();
     }
 
     @Override
@@ -108,7 +112,9 @@ public class AssistiveTouchService extends AccessibilityService
         instance = null;
         handler.removeCallbacksAndMessages(null);
         hideMenu();
+        hideSidebar();
         removeButton();
+        removeEdges();
         if (prefs != null) prefs.unregisterOnSharedPreferenceChangeListener(this);
         if (cameraManager != null && torchId != null) {
             try { cameraManager.unregisterTorchCallback(torchCallback); } catch (Exception ignored) { }
@@ -119,12 +125,20 @@ public class AssistiveTouchService extends AccessibilityService
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
         hideMenu();
-        if (button != null) handler.postDelayed(this::snapToEdge, 300);
+        hideSidebar();
+        handler.postDelayed(() -> {
+            if (button != null) snapToEdge();
+            rebuildEdges();
+        }, 300);
     }
 
     @Override
     public void onSharedPreferenceChanged(SharedPreferences sp, String key) {
         if (key == null) return;
+        if (key.startsWith(Prefs.EDGE_PREFIX)) {
+            rebuildEdges();
+            return;
+        }
         switch (key) {
             case Prefs.KEY_ENABLED:
                 if (sp.getBoolean(Prefs.KEY_ENABLED, true)) showButton();
@@ -146,26 +160,21 @@ public class AssistiveTouchService extends AccessibilityService
         }
     }
 
-    // ---------------------------------------------------------------- floating button
+    // ================================================================ floating button
 
     private void showButton() {
         if (button != null || wm == null) return;
         int size = dp(prefs.getInt(Prefs.KEY_SIZE, Prefs.DEFAULT_SIZE));
         Point screen = screenSize();
 
-        bp = new WindowManager.LayoutParams(
-                size, size,
-                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                PixelFormat.TRANSLUCENT);
+        bp = overlayParams(size, size, false);
         bp.gravity = Gravity.TOP | Gravity.START;
         bp.x = prefs.getInt(Prefs.KEY_X, screen.x - size - dp(4));
         bp.y = prefs.getInt(Prefs.KEY_Y, screen.y / 3);
         clampPosition(screen);
 
         button = new FloatingButtonView(this);
-        button.setOnTouchListener(touchListener);
+        button.setOnTouchListener(new ButtonTouch());
         try {
             wm.addView(button, bp);
         } catch (Exception e) {
@@ -232,19 +241,48 @@ public class AssistiveTouchService extends AccessibilityService
         prefs.edit().putInt(Prefs.KEY_X, target).putInt(Prefs.KEY_Y, bp.y).apply();
     }
 
-    private final View.OnTouchListener touchListener = new View.OnTouchListener() {
+    /** Which side of the screen the floating button is on. */
+    private int buttonSide() {
+        if (button == null || bp == null) return Gravity.RIGHT;
+        return (bp.x + bp.width / 2 < screenSize().x / 2) ? Gravity.LEFT : Gravity.RIGHT;
+    }
+
+    /**
+     * Gestures on the floating button:
+     * tap / double / triple tap, long press, quick flick up/down/left/right.
+     * A slow drag (or a flick with no action set) moves the button.
+     */
+    private class ButtonTouch implements View.OnTouchListener {
         private float downX, downY;
         private int startX, startY;
-        private boolean dragging;
+        private long downTime;
+        private boolean dragging, longFired;
+        private int tapCount;
         private int slop;
+
+        private final Runnable longPress = () -> {
+            longFired = true;
+            Action a = Prefs.action(prefs, Prefs.KEY_LONG);
+            if (a != Action.NONE && button != null) {
+                button.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+                button.animate().scaleX(1f).scaleY(1f).setDuration(100).start();
+                perform(a, buttonSide());
+            }
+        };
+
+        private final Runnable resolveTaps = () -> {
+            int n = tapCount;
+            tapCount = 0;
+            fireTaps(n);
+        };
 
         @Override
         public boolean onTouch(View v, MotionEvent e) {
             if (slop == 0) slop = ViewConfiguration.get(AssistiveTouchService.this).getScaledTouchSlop();
-            gestures.onTouchEvent(e);
             switch (e.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
                     handler.removeCallbacks(goIdle);
+                    handler.removeCallbacks(resolveTaps);
                     if (snapAnim != null) snapAnim.cancel();
                     v.animate().cancel();
                     v.setAlpha(1f);
@@ -253,13 +291,23 @@ public class AssistiveTouchService extends AccessibilityService
                     downY = e.getRawY();
                     startX = bp.x;
                     startY = bp.y;
+                    downTime = e.getEventTime();
                     dragging = false;
+                    longFired = false;
+                    if (Prefs.action(prefs, Prefs.KEY_LONG) != Action.NONE) {
+                        handler.postDelayed(longPress, ViewConfiguration.getLongPressTimeout());
+                    }
                     return true;
 
                 case MotionEvent.ACTION_MOVE:
+                    if (longFired) return true;
                     float dx = e.getRawX() - downX;
                     float dy = e.getRawY() - downY;
-                    if (!dragging && Math.hypot(dx, dy) > slop) dragging = true;
+                    if (!dragging && Math.hypot(dx, dy) > slop) {
+                        dragging = true;
+                        tapCount = 0;
+                        handler.removeCallbacks(longPress);
+                    }
                     if (dragging) {
                         bp.x = startX + (int) dx;
                         bp.y = startY + (int) dy;
@@ -268,63 +316,187 @@ public class AssistiveTouchService extends AccessibilityService
                     return true;
 
                 case MotionEvent.ACTION_UP:
+                    handler.removeCallbacks(longPress);
+                    v.animate().scaleX(1f).scaleY(1f).setDuration(120).start();
+                    scheduleIdle();
+                    if (longFired) {
+                        tapCount = 0;
+                        return true;
+                    }
+                    if (dragging) {
+                        handleDragEnd(e);
+                    } else {
+                        tapCount++;
+                        if (tapCount >= maxTaps()) {
+                            int n = tapCount;
+                            tapCount = 0;
+                            fireTaps(n);
+                        } else {
+                            handler.postDelayed(resolveTaps, ViewConfiguration.getDoubleTapTimeout());
+                        }
+                    }
+                    return true;
+
                 case MotionEvent.ACTION_CANCEL:
+                    handler.removeCallbacks(longPress);
                     v.animate().scaleX(1f).scaleY(1f).setDuration(120).start();
                     if (dragging) snapToEdge();
+                    tapCount = 0;
                     scheduleIdle();
                     return true;
             }
             return false;
         }
-    };
 
-    private void setupGestures() {
-        gestures = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
-            @Override
-            public boolean onDown(MotionEvent e) { return true; }
+        private void handleDragEnd(MotionEvent e) {
+            float dx = e.getRawX() - downX;
+            float dy = e.getRawY() - downY;
+            long dt = e.getEventTime() - downTime;
+            String key;
+            if (Math.abs(dx) > Math.abs(dy)) key = dx > 0 ? Prefs.KEY_SWIPE_RIGHT : Prefs.KEY_SWIPE_LEFT;
+            else key = dy > 0 ? Prefs.KEY_SWIPE_DOWN : Prefs.KEY_SWIPE_UP;
+            Action a = Prefs.action(prefs, key);
 
-            @Override
-            public boolean onSingleTapUp(MotionEvent e) {
-                // Open instantly when no double-tap action is configured.
-                if (gestureAction(Prefs.KEY_DOUBLE) == Action.NONE) {
-                    perform(Action.MENU);
+            if (dt <= FLICK_MAX_MS && Math.hypot(dx, dy) > dp(36) && a != Action.NONE) {
+                // Quick flick: run the action and put the button back where it was.
+                bp.x = startX;
+                bp.y = startY;
+                safeUpdate();
+                if (button != null) button.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+                perform(a, buttonSide());
+            } else {
+                snapToEdge();
+            }
+        }
+
+        private int maxTaps() {
+            if (Prefs.action(prefs, Prefs.KEY_TRIPLE) != Action.NONE) return 3;
+            if (Prefs.action(prefs, Prefs.KEY_DOUBLE) != Action.NONE) return 2;
+            return 1;
+        }
+
+        private void fireTaps(int n) {
+            String key = n <= 1 ? Prefs.KEY_TAP : (n == 2 ? Prefs.KEY_DOUBLE : Prefs.KEY_TRIPLE);
+            Action a = Prefs.action(prefs, key);
+            if (a != Action.NONE) perform(a, buttonSide());
+        }
+    }
+
+    // ================================================================ edge side bars
+
+    private void rebuildEdges() {
+        removeEdges();
+        if (wm == null || prefs == null) return;
+        if (Prefs.edgeEnabled(prefs, Prefs.LEFT)) addEdge(Prefs.LEFT, 0);
+        if (Prefs.edgeEnabled(prefs, Prefs.RIGHT)) addEdge(Prefs.RIGHT, 1);
+    }
+
+    private void removeEdges() {
+        for (int i = 0; i < edgeViews.length; i++) {
+            if (edgeViews[i] != null) {
+                try { wm.removeView(edgeViews[i]); } catch (Exception ignored) { }
+                edgeViews[i] = null;
+            }
+        }
+    }
+
+    private void addEdge(String side, int index) {
+        boolean left = Prefs.LEFT.equals(side);
+        Point screen = screenSize();
+        int len = Math.min(dp(Prefs.edgeInt(prefs, side, "len")), screen.y);
+        int thick = dp(Prefs.edgeInt(prefs, side, "thick"));
+        int pos = Prefs.edgeInt(prefs, side, "pos");
+        float alpha = Prefs.edgeInt(prefs, side, "alpha") / 100f;
+
+        EdgeHandleView v = new EdgeHandleView(this, left, alpha);
+        WindowManager.LayoutParams lp = overlayParams(thick, len, false);
+        lp.gravity = Gravity.TOP | (left ? Gravity.LEFT : Gravity.RIGHT);
+        lp.x = 0;
+        lp.y = Math.max(0, (screen.y - len) * pos / 100);
+        v.setOnTouchListener(new EdgeTouch(side, left));
+        try {
+            wm.addView(v, lp);
+            edgeViews[index] = v;
+        } catch (Exception ignored) { }
+    }
+
+    private void setEdgesVisible(boolean visible) {
+        for (View v : edgeViews) if (v != null) v.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
+    }
+
+    /** Tap, long press, swipe inward / up / down on an edge bar. */
+    private class EdgeTouch implements View.OnTouchListener {
+        private final String side;
+        private final boolean left;
+        private float x0, y0;
+        private boolean moved, longFired;
+        private View view;
+        private int slop;
+
+        private final Runnable longPress = () -> {
+            longFired = true;
+            fire("long");
+        };
+
+        EdgeTouch(String side, boolean left) {
+            this.side = side;
+            this.left = left;
+        }
+
+        @Override
+        public boolean onTouch(View v, MotionEvent e) {
+            view = v;
+            if (slop == 0) slop = ViewConfiguration.get(AssistiveTouchService.this).getScaledTouchSlop();
+            switch (e.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    x0 = e.getRawX();
+                    y0 = e.getRawY();
+                    moved = false;
+                    longFired = false;
+                    if (Prefs.action(prefs, Prefs.edgeKey(side, "long")) != Action.NONE) {
+                        handler.postDelayed(longPress, ViewConfiguration.getLongPressTimeout());
+                    }
                     return true;
-                }
-                return false;
-            }
 
-            @Override
-            public boolean onSingleTapConfirmed(MotionEvent e) {
-                if (gestureAction(Prefs.KEY_DOUBLE) != Action.NONE) perform(Action.MENU);
-                return true;
-            }
+                case MotionEvent.ACTION_MOVE:
+                    if (!moved && Math.hypot(e.getRawX() - x0, e.getRawY() - y0) > slop) {
+                        moved = true;
+                        handler.removeCallbacks(longPress);
+                    }
+                    return true;
 
-            @Override
-            public boolean onDoubleTap(MotionEvent e) {
-                Action a = gestureAction(Prefs.KEY_DOUBLE);
-                if (a != Action.NONE) perform(a);
-                return true;
-            }
+                case MotionEvent.ACTION_UP:
+                    handler.removeCallbacks(longPress);
+                    if (longFired) return true;
+                    float inward = left ? e.getRawX() - x0 : x0 - e.getRawX();
+                    float dy = e.getRawY() - y0;
+                    int th = dp(30);
+                    if (!moved) fire("tap");
+                    else if (inward > th && inward >= Math.abs(dy)) fire("in");
+                    else if (Math.abs(dy) > th) fire(dy < 0 ? "up" : "down");
+                    return true;
 
-            @Override
-            public void onLongPress(MotionEvent e) {
-                Action a = gestureAction(Prefs.KEY_LONG);
-                if (a != Action.NONE) {
-                    if (button != null) button.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
-                    perform(a);
-                }
+                case MotionEvent.ACTION_CANCEL:
+                    handler.removeCallbacks(longPress);
+                    return true;
             }
-        }, handler);
+            return false;
+        }
+
+        private void fire(String name) {
+            Action a = Prefs.action(prefs, Prefs.edgeKey(side, name));
+            if (a == Action.NONE) return;
+            if (view != null) view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+            perform(a, left ? Gravity.LEFT : Gravity.RIGHT);
+        }
     }
 
-    private Action gestureAction(String key) {
-        return Action.fromId(prefs.getString(key, Action.NONE.id));
-    }
-
-    // ---------------------------------------------------------------- menu
+    // ================================================================ menu
 
     private void showMenu() {
-        if (menuRoot != null || wm == null) return;
+        if (wm == null) return;
+        hideSidebar();
+        if (menuRoot != null) return;
         handler.removeCallbacks(goIdle);
 
         FrameLayout root = new FrameLayout(this);
@@ -335,11 +507,8 @@ public class AssistiveTouchService extends AccessibilityService
         panel.setOrientation(LinearLayout.VERTICAL);
         int pad = dp(10);
         panel.setPadding(pad, pad, pad, pad);
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(0xE61C1C1E);
-        bg.setCornerRadius(dp(32));
-        panel.setBackground(bg);
-        panel.setClickable(true); // taps on the panel itself don't close it
+        panel.setBackground(roundRect(0xE61C1C1E, dp(32)));
+        panel.setClickable(true);
 
         LinearLayout row = null;
         Action[] items = Action.MENU_ITEMS;
@@ -347,9 +516,11 @@ public class AssistiveTouchService extends AccessibilityService
             if (i % 3 == 0) {
                 row = new LinearLayout(this);
                 row.setOrientation(LinearLayout.HORIZONTAL);
-                panel.addView(row);
+                row.setGravity(Gravity.CENTER_HORIZONTAL);
+                panel.addView(row, new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
             }
-            row.addView(makeCell(items[i]));
+            row.addView(makeMenuCell(items[i]));
         }
 
         root.addView(panel, new FrameLayout.LayoutParams(
@@ -357,14 +528,9 @@ public class AssistiveTouchService extends AccessibilityService
                 FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.CENTER));
 
-        WindowManager.LayoutParams mp = new WindowManager.LayoutParams(
-                WindowManager.LayoutParams.MATCH_PARENT,
-                WindowManager.LayoutParams.MATCH_PARENT,
-                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                PixelFormat.TRANSLUCENT);
         try {
-            wm.addView(root, mp);
+            wm.addView(root, overlayParams(WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.MATCH_PARENT, true));
         } catch (Exception e) {
             return;
         }
@@ -380,37 +546,23 @@ public class AssistiveTouchService extends AccessibilityService
                 .setDuration(240).start();
     }
 
-    private View makeCell(Action a) {
+    private View makeMenuCell(Action a) {
         LinearLayout cell = new LinearLayout(this);
         cell.setOrientation(LinearLayout.VERTICAL);
         cell.setGravity(Gravity.CENTER);
         cell.setLayoutParams(new LinearLayout.LayoutParams(dp(86), dp(86)));
-
-        GradientDrawable mask = new GradientDrawable();
-        mask.setColor(Color.WHITE);
-        mask.setCornerRadius(dp(20));
-        cell.setBackground(new RippleDrawable(ColorStateList.valueOf(0x40FFFFFF), null, mask));
+        cell.setBackground(ripple(dp(20)));
 
         ImageView icon = new ImageView(this);
         icon.setImageResource(a.icon);
         cell.addView(icon, new LinearLayout.LayoutParams(dp(30), dp(30)));
-
-        TextView label = new TextView(this);
-        label.setText(a.label);
-        label.setTextColor(Color.WHITE);
-        label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
-        label.setGravity(Gravity.CENTER);
-        label.setSingleLine(true);
-        label.setEllipsize(TextUtils.TruncateAt.END);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = dp(6);
-        cell.addView(label, lp);
+        cell.addView(cellLabel(getString(a.label)));
 
         cell.setContentDescription(getString(a.label));
         cell.setOnClickListener(v -> {
+            int side = buttonSide();
             hideMenu();
-            perform(a);
+            perform(a, side);
         });
         return cell;
     }
@@ -420,18 +572,140 @@ public class AssistiveTouchService extends AccessibilityService
         View r = menuRoot;
         menuRoot = null;
         try { wm.removeView(r); } catch (Exception ignored) { }
-        if (button != null) {
+        restoreButton();
+    }
+
+    // ================================================================ app sidebar
+
+    private void showSidebar(int gravity) {
+        if (wm == null) return;
+        hideMenu();
+        if (sidebarRoot != null) {
+            hideSidebar();
+            return;
+        }
+        boolean left = gravity == Gravity.LEFT;
+
+        FrameLayout root = new FrameLayout(this);
+        root.setBackgroundColor(0x55000000);
+        root.setOnClickListener(v -> hideSidebar());
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setVerticalScrollBarEnabled(false);
+        scroll.setBackground(roundRect(0xF01C1C1E, dp(26)));
+        scroll.setClickable(true);
+
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setGravity(Gravity.CENTER_HORIZONTAL);
+        panel.setPadding(dp(6), dp(12), dp(6), dp(12));
+
+        PackageManager pm = getPackageManager();
+        List<String> apps = Prefs.sidebarApps(prefs);
+        for (String pkg : apps) {
+            Drawable icon = Apps.icon(pm, pkg);
+            if (icon == null) continue;
+            panel.addView(makeSideCell(icon, Apps.label(pm, pkg), false, v -> {
+                hideSidebar();
+                launchApp(pkg);
+            }));
+        }
+        Drawable edit = getDrawable(apps.isEmpty() ? R.drawable.ic_add : R.drawable.ic_edit);
+        panel.addView(makeSideCell(edit, apps.isEmpty() ? "Add apps" : "Edit", true, v -> {
+            hideSidebar();
+            openActivity(AppsActivity.class);
+        }));
+        scroll.addView(panel);
+
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                dp(92), FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER_VERTICAL | (left ? Gravity.LEFT : Gravity.RIGHT));
+        lp.leftMargin = dp(8);
+        lp.rightMargin = dp(8);
+        lp.topMargin = dp(48);
+        lp.bottomMargin = dp(48);
+        root.addView(scroll, lp);
+
+        try {
+            wm.addView(root, overlayParams(WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.MATCH_PARENT, true));
+        } catch (Exception e) {
+            return;
+        }
+        sidebarRoot = root;
+        if (button != null) button.setVisibility(View.INVISIBLE);
+
+        root.setAlpha(0f);
+        root.animate().alpha(1f).setDuration(150).start();
+        scroll.setTranslationX(left ? -dp(120) : dp(120));
+        scroll.animate().translationX(0).setDuration(220)
+                .setInterpolator(new DecelerateInterpolator()).start();
+    }
+
+    private View makeSideCell(Drawable icon, String label, boolean small, View.OnClickListener click) {
+        LinearLayout cell = new LinearLayout(this);
+        cell.setOrientation(LinearLayout.VERTICAL);
+        cell.setGravity(Gravity.CENTER);
+        cell.setPadding(dp(4), dp(8), dp(4), dp(8));
+        cell.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        cell.setBackground(ripple(dp(16)));
+
+        ImageView iv = new ImageView(this);
+        iv.setImageDrawable(icon);
+        int s = small ? dp(28) : dp(46);
+        cell.addView(iv, new LinearLayout.LayoutParams(s, s));
+        cell.addView(cellLabel(label));
+
+        cell.setContentDescription(label);
+        cell.setOnClickListener(click);
+        return cell;
+    }
+
+    private void hideSidebar() {
+        if (sidebarRoot == null) return;
+        View r = sidebarRoot;
+        sidebarRoot = null;
+        try { wm.removeView(r); } catch (Exception ignored) { }
+        restoreButton();
+    }
+
+    private void restoreButton() {
+        if (button != null && menuRoot == null && sidebarRoot == null) {
             button.setVisibility(View.VISIBLE);
             wake();
         }
     }
 
-    // ---------------------------------------------------------------- actions
+    private void launchApp(String pkg) {
+        Intent i = getPackageManager().getLaunchIntentForPackage(pkg);
+        if (i == null) {
+            Toast.makeText(this, "App not found", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+        try {
+            startActivity(i);
+        } catch (Exception e) {
+            Toast.makeText(this, "Can't open app", Toast.LENGTH_SHORT).show();
+        }
+    }
 
-    private void perform(Action a) {
+    private void openActivity(Class<?> cls) {
+        Intent i = new Intent(this, cls);
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        startActivity(i);
+    }
+
+    // ================================================================ actions
+
+    private void perform(Action a, int side) {
         switch (a) {
             case MENU:
                 showMenu();
+                break;
+            case SIDEBAR:
+                showSidebar(side);
                 break;
             case HOME:
                 performGlobalAction(GLOBAL_ACTION_HOME);
@@ -472,9 +746,7 @@ public class AssistiveTouchService extends AccessibilityService
                 toggleTorch();
                 break;
             case SETTINGS:
-                Intent i = new Intent(this, MainActivity.class);
-                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                startActivity(i);
+                openActivity(MainActivity.class);
                 break;
             case NONE:
             default:
@@ -487,15 +759,13 @@ public class AssistiveTouchService extends AccessibilityService
             toast(R.string.needs_android9);
             return;
         }
-        // Hide the button so it isn't in the screenshot.
         if (button != null) button.setVisibility(View.INVISIBLE);
+        setEdgesVisible(false);
         handler.postDelayed(() -> {
             performGlobalAction(GLOBAL_ACTION_TAKE_SCREENSHOT);
             handler.postDelayed(() -> {
-                if (button != null && menuRoot == null) {
-                    button.setVisibility(View.VISIBLE);
-                    wake();
-                }
+                setEdgesVisible(true);
+                restoreButton();
             }, 1500);
         }, 350);
     }
@@ -540,7 +810,40 @@ public class AssistiveTouchService extends AccessibilityService
         }
     }
 
-    // ---------------------------------------------------------------- helpers
+    // ================================================================ helpers
+
+    private WindowManager.LayoutParams overlayParams(int w, int h, boolean fullScreen) {
+        int flags = WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN;
+        if (!fullScreen) flags |= WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+        return new WindowManager.LayoutParams(w, h,
+                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY, flags, PixelFormat.TRANSLUCENT);
+    }
+
+    private GradientDrawable roundRect(int color, float radius) {
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(color);
+        g.setCornerRadius(radius);
+        return g;
+    }
+
+    private RippleDrawable ripple(float radius) {
+        return new RippleDrawable(ColorStateList.valueOf(0x40FFFFFF), null, roundRect(Color.WHITE, radius));
+    }
+
+    private TextView cellLabel(String text) {
+        TextView label = new TextView(this);
+        label.setText(text);
+        label.setTextColor(Color.WHITE);
+        label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        label.setGravity(Gravity.CENTER);
+        label.setSingleLine(true);
+        label.setEllipsize(TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(5);
+        label.setLayoutParams(lp);
+        return label;
+    }
 
     private Point screenSize() {
         DisplayMetrics dm = new DisplayMetrics();
