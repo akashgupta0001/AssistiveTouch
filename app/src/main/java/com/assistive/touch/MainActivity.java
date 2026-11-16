@@ -47,6 +47,8 @@ public class MainActivity extends Activity {
     private final Button[] tabButtons = new Button[Prefs.BUTTON_COUNT];
     private int currentButton;
     private boolean askedNotif;
+    private boolean autoTried;
+    private TextView autoText;
     private final List<Runnable> refreshers = new ArrayList<>();
     private static final int REQ_PHOTO = 41;
 
@@ -77,7 +79,15 @@ public class MainActivity extends Activity {
 
         btnEnable = new Button(this);
         btnEnable.setText(R.string.btn_enable);
-        btnEnable.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
+        btnEnable.setOnClickListener(v -> {
+            prefs.edit().putBoolean(Prefs.KEY_EXITED, false).apply();
+            if (AutoEnable.canWrite(this)) {
+                AutoEnable.enable(this);
+                status.postDelayed(this::onResume, 1200);
+            } else {
+                startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+            }
+        });
         root.addView(btnEnable);
 
         TextView hint = note(getString(R.string.restricted_hint));
@@ -97,7 +107,15 @@ public class MainActivity extends Activity {
         kr.addView(actionButton("2. Battery saver → No restrictions", this::openBatterySettings));
         kr.addView(note("3. Open Recents, then long-press (or pull down) the AssistiveTouch card and tap the 🔒 lock icon. "
                 + "Locked apps are skipped by \"Clear all\"."));
-        kr.addView(note("If the buttons ever disappear, open this app: if it says OFF, turn it on again in Accessibility."));
+        kr.addView(note("Why: \"Clear all\" force-stops unlocked apps, and Android then switches their Accessibility "
+                + "service OFF. Step 3 (lock) prevents this."));
+        autoText = new TextView(this);
+        autoText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        autoText.setPadding(0, dp(10), 0, 0);
+        kr.addView(autoText);
+        kr.addView(note("Optional auto-restart (one time, needs a computer with ADB, or the LADB / Shizuku app):\n"
+                + "adb shell pm grant com.assistive.touch android.permission.WRITE_SECURE_SETTINGS\n"
+                + "After that, opening this app turns AssistiveTouch back on by itself."));
         Button exit = actionButton("Exit AssistiveTouch", () -> {
             KeepAliveService.exitEverything(this);
             Toast.makeText(this, "AssistiveTouch turned off", Toast.LENGTH_SHORT).show();
@@ -165,6 +183,19 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         boolean on = isServiceEnabled();
+        // After "Clear all" Android switches the service off. If we may, switch it back on now.
+        if (!on && !prefs.getBoolean(Prefs.KEY_EXITED, false) && AutoEnable.canWrite(this) && !autoTried) {
+            autoTried = true;
+            AutoEnable.enable(this);
+            status.setText("Restarting…");
+            status.postDelayed(this::onResume, 1200);
+            return;
+        }
+        if (autoText != null) {
+            autoText.setText(AutoEnable.canWrite(this)
+                    ? "✅ Auto-restart is ON: just open this app after \"Clear all\" and the buttons come back."
+                    : "Auto-restart is OFF (optional). See the steps below.");
+        }
         status.setText(on ? R.string.status_on : R.string.status_off);
         status.setTextColor(on ? Color.rgb(52, 199, 89) : Color.rgb(255, 59, 48));
         btnEnable.setVisibility(on ? View.GONE : View.VISIBLE);

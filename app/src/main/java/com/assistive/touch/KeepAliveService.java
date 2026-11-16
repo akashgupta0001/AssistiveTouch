@@ -59,6 +59,7 @@ public class KeepAliveService extends Service {
 
     /** Turn off the accessibility service and this keep-alive service. */
     public static void exitEverything(Context c) {
+        Prefs.get(c).edit().putBoolean(Prefs.KEY_EXITED, true).commit();
         AssistiveTouchService s = AssistiveTouchService.instance;
         if (s != null) s.exit();
         stop(c);

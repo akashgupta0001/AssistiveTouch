@@ -51,6 +51,8 @@ public final class Prefs {
     public static final int BUTTON_COUNT = 3;
     public static final String KEY_BUTTONS_MASTER = "buttons_master";
     public static final String KEY_HIDE_ON_VOLUME = "hide_on_vol_down";
+    /** True after the user pressed Exit, so the app doesn't switch itself back on. */
+    public static final String KEY_EXITED = "user_exited";
 
     public static final int DEFAULT_SIZE = 56;       // dp
     public static final int DEFAULT_IDLE_ALPHA = 45; // percent
