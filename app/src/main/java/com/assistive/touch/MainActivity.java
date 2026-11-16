@@ -123,7 +123,7 @@ public class MainActivity extends Activity {
         sb.addView(sidebarCount);
         sb.addView(note("Choose \"App Sidebar\" as the action for any tap, swipe or side bar to open it."));
         Button manage = new Button(this);
-        manage.setText("Add / edit / remove apps");
+        manage.setText("Add / edit / remove apps & actions");
         manage.setOnClickListener(v -> startActivity(new Intent(this, AppsActivity.class)));
         sb.addView(manage);
     }
@@ -136,8 +136,9 @@ public class MainActivity extends Activity {
         status.setTextColor(on ? Color.rgb(52, 199, 89) : Color.rgb(255, 59, 48));
         btnEnable.setVisibility(on ? View.GONE : View.VISIBLE);
         int n = Prefs.sidebarApps(prefs).size();
-        sidebarCount.setText(n == 1 ? "1 app in sidebar" : n + " apps in sidebar");
+        sidebarCount.setText(n == 1 ? "1 item in sidebar" : n + " items in sidebar");
         for (Runnable r : refreshers) r.run();
+        if (preview != null) preview.loadStyle();
     }
 
     // ------------------------------------------------------------ appearance
@@ -241,51 +242,19 @@ public class MainActivity extends Activity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode != REQ_PHOTO || resultCode != RESULT_OK || data == null || data.getData() == null) return;
-        Uri uri = data.getData();
-        new Thread(() -> {
-            boolean ok = savePhoto(uri);
-            runOnUiThread(() -> {
-                if (ok) {
-                    prefs.edit().putLong(Prefs.KEY_PHOTO, System.currentTimeMillis()).apply();
-                    preview.loadStyle();
-                } else {
-                    Toast.makeText(this, "Couldn't load that photo", Toast.LENGTH_SHORT).show();
-                }
-            });
-        }).start();
-    }
-
-    /** Decode, centre-crop to a square, scale to 256 px and save in app storage. */
-    private boolean savePhoto(Uri uri) {
-        try {
-            ContentResolver cr = getContentResolver();
-            BitmapFactory.Options o = new BitmapFactory.Options();
-            o.inJustDecodeBounds = true;
-            try (InputStream in = cr.openInputStream(uri)) { BitmapFactory.decodeStream(in, null, o); }
-            int sample = 1;
-            while (Math.min(o.outWidth, o.outHeight) / (sample * 2) >= 256) sample *= 2;
-            BitmapFactory.Options o2 = new BitmapFactory.Options();
-            o2.inSampleSize = sample;
-            Bitmap src;
-            try (InputStream in = cr.openInputStream(uri)) { src = BitmapFactory.decodeStream(in, null, o2); }
-            if (src == null) return false;
-            int side = Math.min(src.getWidth(), src.getHeight());
-            Bitmap sq = Bitmap.createBitmap(src, (src.getWidth() - side) / 2, (src.getHeight() - side) / 2, side, side);
-            Bitmap out = Bitmap.createScaledBitmap(sq, 256, 256, true);
-            try (FileOutputStream fo = new FileOutputStream(FloatingButtonView.photoFile(this))) {
-                out.compress(Bitmap.CompressFormat.PNG, 100, fo);
-            }
-            return true;
-        } catch (Throwable t) {
-            return false;
-        }
+        Intent crop = new Intent(this, CropActivity.class);
+        crop.setData(data.getData());
+        crop.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        startActivity(crop);
     }
 
     private void edgeSection(LinearLayout root, String side, String title) {
         root.addView(header(title));
         LinearLayout c = card(root);
         switchRow(c, "Enable " + title.toLowerCase(), Prefs.edgeKey(side, "enabled"), false);
-        actionRow(c, "Tap", Prefs.edgeKey(side, "tap"));
+        actionRow(c, "Single tap", Prefs.edgeKey(side, "tap"));
+        actionRow(c, "Double tap", Prefs.edgeKey(side, "double"));
+        actionRow(c, "Triple tap", Prefs.edgeKey(side, "triple"));
         actionRow(c, "Long press", Prefs.edgeKey(side, "long"));
         actionRow(c, "Swipe inward", Prefs.edgeKey(side, "in"));
         actionRow(c, "Swipe up", Prefs.edgeKey(side, "up"));

@@ -60,6 +60,8 @@ public class AssistiveTouchService extends AccessibilityService
     private View sidebarRoot;
     private ValueAnimator snapAnim;
     private final View[] edgeViews = new View[2]; // 0 = left, 1 = right
+    private long highlightUntil;
+    private final Runnable endHighlight = this::rebuildEdges;
 
     private CameraManager cameraManager;
     private String torchId;
@@ -136,6 +138,13 @@ public class AssistiveTouchService extends AccessibilityService
     public void onSharedPreferenceChanged(SharedPreferences sp, String key) {
         if (key == null) return;
         if (key.startsWith(Prefs.EDGE_PREFIX)) {
+            if (key.endsWith("_len") || key.endsWith("_thick") || key.endsWith("_pos")
+                    || key.endsWith("_alpha") || key.endsWith("_enabled")) {
+                // Show the bar strongly for a moment so its size and position are easy to see.
+                highlightUntil = System.currentTimeMillis() + 2500;
+                handler.removeCallbacks(endHighlight);
+                handler.postDelayed(endHighlight, 2600);
+            }
             rebuildEdges();
             return;
         }
@@ -426,7 +435,8 @@ public class AssistiveTouchService extends AccessibilityService
         int pos = Prefs.edgeInt(prefs, side, "pos");
         float alpha = Prefs.edgeInt(prefs, side, "alpha") / 100f;
 
-        EdgeHandleView v = new EdgeHandleView(this, left, alpha);
+        boolean highlight = System.currentTimeMillis() < highlightUntil;
+        EdgeHandleView v = new EdgeHandleView(this, left, alpha, highlight);
         WindowManager.LayoutParams lp = overlayParams(thick, len, false);
         lp.gravity = Gravity.TOP | (left ? Gravity.LEFT : Gravity.RIGHT);
         lp.x = 0;
@@ -451,10 +461,29 @@ public class AssistiveTouchService extends AccessibilityService
         private View view;
         private int slop;
 
+        private int tapCount;
+
         private final Runnable longPress = () -> {
             longFired = true;
+            tapCount = 0;
             fire("long");
         };
+
+        private final Runnable resolveTaps = () -> {
+            int n = tapCount;
+            tapCount = 0;
+            fireTaps(n);
+        };
+
+        private int maxTaps() {
+            if (Prefs.action(prefs, Prefs.edgeKey(side, "triple")) != Action.NONE) return 3;
+            if (Prefs.action(prefs, Prefs.edgeKey(side, "double")) != Action.NONE) return 2;
+            return 1;
+        }
+
+        private void fireTaps(int n) {
+            fire(n <= 1 ? "tap" : (n == 2 ? "double" : "triple"));
+        }
 
         EdgeTouch(String side, boolean left) {
             this.side = side;
@@ -467,6 +496,7 @@ public class AssistiveTouchService extends AccessibilityService
             if (slop == 0) slop = ViewConfiguration.get(AssistiveTouchService.this).getScaledTouchSlop();
             switch (e.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
+                    handler.removeCallbacks(resolveTaps);
                     x0 = e.getRawX();
                     y0 = e.getRawY();
                     moved = false;
@@ -479,6 +509,7 @@ public class AssistiveTouchService extends AccessibilityService
                 case MotionEvent.ACTION_MOVE:
                     if (!moved && Math.hypot(e.getRawX() - x0, e.getRawY() - y0) > slop) {
                         moved = true;
+                        tapCount = 0;
                         handler.removeCallbacks(longPress);
                     }
                     return true;
@@ -489,8 +520,16 @@ public class AssistiveTouchService extends AccessibilityService
                     float inward = left ? e.getRawX() - x0 : x0 - e.getRawX();
                     float dy = e.getRawY() - y0;
                     int th = dp(30);
-                    if (!moved) fire("tap");
-                    else if (inward > th && inward >= Math.abs(dy)) fire("in");
+                    if (!moved) {
+                        tapCount++;
+                        if (tapCount >= maxTaps()) {
+                            int n = tapCount;
+                            tapCount = 0;
+                            fireTaps(n);
+                        } else {
+                            handler.postDelayed(resolveTaps, ViewConfiguration.getDoubleTapTimeout());
+                        }
+                    } else if (inward > th && inward >= Math.abs(dy)) fire("in");
                     else if (Math.abs(dy) > th) fire(dy < 0 ? "up" : "down");
                     return true;
 
@@ -620,12 +659,21 @@ public class AssistiveTouchService extends AccessibilityService
 
         PackageManager pm = getPackageManager();
         List<String> apps = Prefs.sidebarApps(prefs);
-        for (String pkg : apps) {
-            Drawable icon = Apps.icon(pm, pkg);
+        for (String entry : apps) {
+            if (Prefs.isAction(entry)) {
+                Action a = Prefs.actionOf(entry);
+                if (a == Action.NONE || a.icon == 0) continue;
+                panel.addView(makeSideCell(getDrawable(a.icon), getString(a.label), true, v -> {
+                    hideSidebar();
+                    perform(a, gravity);
+                }));
+                continue;
+            }
+            Drawable icon = Apps.icon(pm, entry);
             if (icon == null) continue;
-            panel.addView(makeSideCell(icon, Apps.label(pm, pkg), false, v -> {
+            panel.addView(makeSideCell(icon, Apps.label(pm, entry), false, v -> {
                 hideSidebar();
-                launchApp(pkg);
+                launchApp(entry);
             }));
         }
         Drawable edit = getDrawable(apps.isEmpty() ? R.drawable.ic_add : R.drawable.ic_edit);
@@ -671,7 +719,16 @@ public class AssistiveTouchService extends AccessibilityService
 
         ImageView iv = new ImageView(this);
         iv.setImageDrawable(icon);
-        int s = small ? dp(28) : dp(46);
+        int s = small ? dp(30) : dp(46);
+        if (small) {
+            // system action: white icon on a soft round background, same size as app icons
+            iv.setPadding(dp(8), dp(8), dp(8), dp(8));
+            GradientDrawable g = new GradientDrawable();
+            g.setShape(GradientDrawable.OVAL);
+            g.setColor(0x33FFFFFF);
+            iv.setBackground(g);
+            s = dp(46);
+        }
         cell.addView(iv, new LinearLayout.LayoutParams(s, s));
         cell.addView(cellLabel(label));
 

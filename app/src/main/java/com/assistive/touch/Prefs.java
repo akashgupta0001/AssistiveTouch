@@ -38,6 +38,8 @@ public final class Prefs {
 
     // App sidebar
     public static final String KEY_SIDEBAR_APPS = "sidebar_apps";
+    /** Sidebar entries are package names, or "action:<id>" for system actions. */
+    public static final String ACTION_PREFIX = "action:";
 
     // Edge bars: keys look like edge_L_tap, edge_R_len ...
     public static final String EDGE_PREFIX = "edge_";
@@ -95,6 +97,14 @@ public final class Prefs {
             if (!pkg.trim().isEmpty()) out.add(pkg.trim());
         }
         return out;
+    }
+
+    public static boolean isAction(String entry) {
+        return entry.startsWith(ACTION_PREFIX);
+    }
+
+    public static Action actionOf(String entry) {
+        return Action.fromId(entry.substring(ACTION_PREFIX.length()));
     }
 
     public static void saveSidebarApps(SharedPreferences p, List<String> apps) {

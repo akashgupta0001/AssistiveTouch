@@ -29,7 +29,7 @@ public class AppsActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setTitle("Sidebar apps");
+        setTitle("Sidebar items");
         prefs = Prefs.get(this);
 
         ScrollView scroll = new ScrollView(this);
@@ -40,13 +40,20 @@ public class AppsActivity extends Activity {
         scroll.addView(root);
         setContentView(scroll);
 
+        LinearLayout buttons = new LinearLayout(this);
+        buttons.setOrientation(LinearLayout.HORIZONTAL);
         Button add = new Button(this);
         add.setText("+ Add apps");
         add.setOnClickListener(v -> showPicker());
-        root.addView(add);
+        Button addActions = new Button(this);
+        addActions.setText("+ Add actions");
+        addActions.setOnClickListener(v -> showActionPicker());
+        buttons.addView(add, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        buttons.addView(addActions, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        root.addView(buttons);
 
         TextView help = new TextView(this);
-        help.setText("Use ▲ ▼ to change the order and ✕ to remove an app.");
+        help.setText("Apps and system actions (Home, Back, Screenshot, Lock, Torch…) can both go in the sidebar. Use ▲ ▼ to change the order and ✕ to remove an item.");
         help.setTextColor(0xFF6C6C70);
         help.setPadding(dp(4), dp(8), 0, dp(8));
         root.addView(help);
@@ -69,7 +76,7 @@ public class AppsActivity extends Activity {
         List<String> apps = Prefs.sidebarApps(prefs);
         if (apps.isEmpty()) {
             TextView empty = new TextView(this);
-            empty.setText("No apps yet. Tap \"+ Add apps\".");
+            empty.setText("Nothing yet. Tap \"+ Add apps\" or \"+ Add actions\".");
             empty.setPadding(dp(8), dp(16), dp(8), dp(16));
             list.addView(empty);
             return;
@@ -84,12 +91,26 @@ public class AppsActivity extends Activity {
             row.setPadding(0, dp(4), 0, dp(4));
 
             ImageView icon = new ImageView(this);
-            Drawable d = Apps.icon(pm, pkg);
-            if (d != null) icon.setImageDrawable(d);
+            String name;
+            if (Prefs.isAction(pkg)) {
+                Action a = Prefs.actionOf(pkg);
+                if (a.icon != 0) icon.setImageResource(a.icon);
+                icon.setColorFilter(Color.WHITE);
+                icon.setPadding(dp(8), dp(8), dp(8), dp(8));
+                GradientDrawable circle = new GradientDrawable();
+                circle.setShape(GradientDrawable.OVAL);
+                circle.setColor(0xFF3A3A3C);
+                icon.setBackground(circle);
+                name = getString(a.label) + "  (action)";
+            } else {
+                Drawable d = Apps.icon(pm, pkg);
+                if (d != null) icon.setImageDrawable(d);
+                name = Apps.label(pm, pkg);
+            }
             row.addView(icon, new LinearLayout.LayoutParams(dp(40), dp(40)));
 
             TextView label = new TextView(this);
-            label.setText(Apps.label(pm, pkg));
+            label.setText(name);
             label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
             label.setPadding(dp(12), 0, dp(4), 0);
             label.setSingleLine(true);
@@ -151,6 +172,39 @@ public class AppsActivity extends Activity {
                     // add newly selected apps at the end
                     for (int i = 0; i < pkgs.size(); i++) {
                         if (checked[i] && !result.contains(pkgs.get(i))) result.add(pkgs.get(i));
+                    }
+                    Prefs.saveSidebarApps(prefs, result);
+                    render();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void showActionPicker() {
+        List<Action> choices = new ArrayList<>();
+        for (Action a : Action.GESTURE_CHOICES) {
+            if (a != Action.NONE && a != Action.SIDEBAR) choices.add(a);
+        }
+        String[] labels = new String[choices.size()];
+        boolean[] checked = new boolean[choices.size()];
+        List<String> current = Prefs.sidebarApps(prefs);
+        for (int i = 0; i < choices.size(); i++) {
+            labels[i] = getString(choices.get(i).label);
+            checked[i] = current.contains(Prefs.ACTION_PREFIX + choices.get(i).id);
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Choose actions")
+                .setMultiChoiceItems(labels, checked, (d, which, isChecked) -> checked[which] = isChecked)
+                .setPositiveButton("Save", (d, w) -> {
+                    List<String> result = new ArrayList<>();
+                    for (String entry : current) {
+                        if (!Prefs.isAction(entry)) { result.add(entry); continue; }
+                        int idx = choices.indexOf(Prefs.actionOf(entry));
+                        if (idx < 0 || checked[idx]) result.add(entry);
+                    }
+                    for (int i = 0; i < choices.size(); i++) {
+                        String entry = Prefs.ACTION_PREFIX + choices.get(i).id;
+                        if (checked[i] && !result.contains(entry)) result.add(entry);
                     }
                     Prefs.saveSidebarApps(prefs, result);
                     render();
