@@ -29,6 +29,7 @@
 
         <activity
             android:name=".MainActivity"
+            android:excludeFromRecents="true"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -38,11 +39,13 @@
 
         <activity
             android:name=".AppsActivity"
+            android:excludeFromRecents="true"
             android:exported="false"
             android:label="Sidebar apps" />
 
         <activity
             android:name=".CropActivity"
+            android:excludeFromRecents="true"
             android:exported="false"
             android:label="Crop photo"
             android:theme="@android:style/Theme.Material.NoActionBar" />

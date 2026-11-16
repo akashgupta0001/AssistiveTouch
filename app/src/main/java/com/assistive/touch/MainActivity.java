@@ -107,6 +107,8 @@ public class MainActivity extends Activity {
         kr.addView(actionButton("2. Battery saver → No restrictions", this::openBatterySettings));
         kr.addView(note("3. Open Recents, then long-press (or pull down) the AssistiveTouch card and tap the 🔒 lock icon. "
                 + "Locked apps are skipped by \"Clear all\"."));
+        kr.addView(note("AssistiveTouch hides itself from Recents, so \"Clear all\" can't close it. "
+                + "If you still see its card in Recents, lock it with 🔒."));
         kr.addView(note("Why: \"Clear all\" force-stops unlocked apps, and Android then switches their Accessibility "
                 + "service OFF. Step 3 (lock) prevents this."));
         autoText = new TextView(this);
