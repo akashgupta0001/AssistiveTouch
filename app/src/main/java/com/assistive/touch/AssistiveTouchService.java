@@ -1,6 +1,8 @@
 package com.assistive.touch;
 
 import android.accessibilityservice.AccessibilityService;
+import android.accessibilityservice.GestureDescription;
+import android.graphics.Path;
 import android.animation.ValueAnimator;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -852,7 +854,7 @@ public class AssistiveTouchService extends AccessibilityService
                 performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS);
                 break;
             case CONTROL_CENTRE:
-                performGlobalAction(GLOBAL_ACTION_QUICK_SETTINGS);
+                openControlCentre();
                 break;
             case POWER:
                 performGlobalAction(GLOBAL_ACTION_POWER_DIALOG);
@@ -919,6 +921,41 @@ public class AssistiveTouchService extends AccessibilityService
             hideForCapture(2000);
         }
         return false; // never block the key
+    }
+
+    private static boolean isXiaomi() {
+        String m = (Build.MANUFACTURER + " " + Build.BRAND).toLowerCase();
+        return m.contains("xiaomi") || m.contains("redmi") || m.contains("poco");
+    }
+
+    /**
+     * Xiaomi HyperOS / MIUI keep the Control Centre separate from notifications, and the
+     * standard "quick settings" action opens notifications there. So on Xiaomi we perform
+     * the same swipe a finger would: down from the top-right corner.
+     */
+    private void openControlCentre() {
+        if (!isXiaomi()) {
+            performGlobalAction(GLOBAL_ACTION_QUICK_SETTINGS);
+            return;
+        }
+        Point screen = screenSize();
+        float x = screen.x * 0.92f;
+        Path path = new Path();
+        path.moveTo(x, 2);
+        path.lineTo(x, screen.y * 0.55f);
+        GestureDescription g = new GestureDescription.Builder()
+                .addStroke(new GestureDescription.StrokeDescription(path, 0, 280))
+                .build();
+        // small delay so a closing menu / sidebar doesn't get in the way
+        handler.postDelayed(() -> {
+            boolean sent = dispatchGesture(g, new GestureResultCallback() {
+                @Override
+                public void onCancelled(GestureDescription d) {
+                    performGlobalAction(GLOBAL_ACTION_QUICK_SETTINGS);
+                }
+            }, null);
+            if (!sent) performGlobalAction(GLOBAL_ACTION_QUICK_SETTINGS);
+        }, 120);
     }
 
     private void adjustVolume(int direction) {
