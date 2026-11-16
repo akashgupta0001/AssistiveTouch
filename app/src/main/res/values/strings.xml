@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AssistiveTouch</string>
+    <string name="service_label">AssistiveTouch</string>
+    <string name="service_description">Shows a floating iPhone-style AssistiveTouch button. It uses accessibility only to perform actions you tap (Home, Back, Recents, Screenshot, Lock screen and more). It does not read your screen content.</string>
+
+    <string name="status_on">AssistiveTouch is ON</string>
+    <string name="status_off">AssistiveTouch is OFF</string>
+    <string name="btn_enable">Turn on in Accessibility settings</string>
+    <string name="btn_app_info">Open App info (allow restricted settings)</string>
+    <string name="restricted_hint">Android 13+: if AssistiveTouch is greyed out in Accessibility settings, open App info, tap the ⋮ menu at the top right, choose \"Allow restricted settings\", then try again.</string>
+    <string name="show_button">Show floating button</string>
+    <string name="size_label">Button size: %1$d dp</string>
+    <string name="alpha_label">Idle opacity: %1$d%%</string>
+    <string name="double_tap">Double-tap action</string>
+    <string name="long_press">Long-press action</string>
+    <string name="single_tap_info">Single tap always opens the menu. Drag the button to move it – it snaps to the nearest edge.</string>
+
+    <string name="act_none">None</string>
+    <string name="act_menu">Open Menu</string>
+    <string name="act_home">Home</string>
+    <string name="act_back">Back</string>
+    <string name="act_recents">Recents</string>
+    <string name="act_notifications">Notifications</string>
+    <string name="act_control">Control Centre</string>
+    <string name="act_screenshot">Screenshot</string>
+    <string name="act_lock">Lock Screen</string>
+    <string name="act_power">Power</string>
+    <string name="act_vol_up">Volume Up</string>
+    <string name="act_vol_down">Volume Down</string>
+    <string name="act_flash">Flashlight</string>
+    <string name="act_split">Split Screen</string>
+    <string name="act_settings">Customise</string>
+
+    <string name="needs_android9">Needs Android 9 or newer</string>
+    <string name="no_flash">No flashlight found</string>
+</resources>
